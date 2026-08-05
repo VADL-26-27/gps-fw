@@ -2,22 +2,22 @@
 
 Firmware architecture for the nose-cone GNSS receiver and LoRa telemetry interface.
 
-Hardware Design: [Hardware Design Document](https://vanderbilt365-my.sharepoint.com/:w:/r/personal/evan_s_ticknor_vanderbilt_edu/_layouts/15/Doc.aspx?sourcedoc=%7BDB7462E8-8C19-4EBC-A119-87AD5BF244CF%7D&file=Design%20Specification%20Group%20Report.docx&action=default&mobileredirect=true)
-
 ## Design summary
 
 The firmware uses **FreeRTOS for application scheduling** and **bare-metal (self-configured) peripheral drivers**. Here, “bare metal” means the firmware owns the MCU UART, DMA/DMAMUX, GPIO, and NVIC configuration rather than depending on a high-level blocking UART driver. UART data movement uses DMA; interrupts only record progress and wake the appropriate task. No protocol parsing, logging, or blocking transmit is performed inside an interrupt service routine (ISR).
 
-The GNSS receiver and LoRa radio have independent antennas and independent UART lines. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
+The GNSS receiver and LoRa radio have independent antennas and independent UARTs. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
 
 ```mermaid
 flowchart TD
     GNSS["MAX-M10S GNSS receiver\nDedicated GNSS antenna"] -->|"NMEA / UBX bytes"| GPDMA["GNSS UART RX DMA\nCircular buffer"]
     GPDMA -->|"UART IDLE or DMA event"| GPISR["Short GNSS UART ISR\nSnapshot producer position"]
-    GPISR --> GPS["gps_process()\nConsume bytes and parse fixes"]
-    GPS --> Q["Telemetry queue\nSoftware-only handoff"]
-    Q --> TELEM["telemetry_process()\nBuild radio payload"]
-    TELEM --> LTDMA["LoRa UART TX DMA"]
+    GPISR --> GPS["GPS_Task\nConsume bytes and parse fixes"]
+    GPS --> FIX["Latest-fix mailbox\nOverwrite stale fix; notify builder"]
+    FIX --> BUILD["Telemetry_Builder_Task\nBuild radio payload"]
+    BUILD --> TXQ["LoRa TX mailbox/queue\nBounded handoff"]
+    TXQ --> LORA_TASK["LoRa_Task\nOwns radio protocol and UART DMA"]
+    LORA_TASK --> LTDMA["LoRa UART TX DMA"]
     LTDMA --> LORA["RAK3172 LoRa module\nDedicated LoRa antenna"]
 ```
 
@@ -28,9 +28,9 @@ FreeRTOS schedules the application work. The drivers remain non-blocking: DMA pe
 | Task | Responsibility | Inputs |
 |---|---|---|
 | `GPS_Task` | Consume GNSS DMA bytes, parse NMEA/UBX, publish valid fixes | GNSS RX notification |
-| `Telem_Task` | Dequeue fixes, build packets, manage LoRa TX DMA | telemetry queue; LoRa completion/response notification |
-| `SD_Task` | Drain the shared log queue and write records | log queue |
-| `USB_Task` | Debug console and diagnostics | USB RX notification |
+| `Telemetry_Builder_Task` | Copy the newest valid fix and build a telemetry frame | latest-fix notification |
+| `LoRa_Task` | Own the RAK3172 protocol, ground-station messages, and UART RX/TX DMA | LoRa RX/TX notification; bounded TX mailbox/queue |
+| `SD_Debug_Task` | Drain logs and provide non-critical debug/USB service | log queue; USB RX notification |
 
 The idle task may enter a low-power mode when all application tasks are blocked.
 
@@ -40,11 +40,11 @@ These are initial relative priorities, not final numeric values. Confirm them wi
 
 | Task | Relative priority | Rationale |
 |---|---:|---|
-| `GPS_Task` | 4 | Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
-| `Telem_Task` | 2 | Services radio responses and sends queued telemetry without delaying GNSS receive processing. |
-| `SD_Task` | 3 | SD-card writes can be slow and must not interfere with GNSS or radio servicing. |
-| `USB_Task` | 1 | Debug/console traffic is non-critical and should yield to flight telemetry. |
-| FreeRTOS idle task | 0 | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
+| `GPS_Task` | High | Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
+| `LoRa_Task` | Medium-high | Services radio responses and ground-station messages without delaying GNSS receive processing. |
+| `Telemetry_Builder_Task` | Medium | Formats the newest fix, but does not own or wait on the UART transfer. |
+| `SD_Debug_Task` | Low | SD writes and debug traffic are non-critical and should yield to flight telemetry. |
+| FreeRTOS idle task | Lowest | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
 
 Tasks should block on queues, direct-to-task notifications, or event groups rather than poll. In particular, `GPS_Task` should be notified whenever the RX DMA producer index advances.
 
@@ -54,9 +54,9 @@ Tasks should block on queues, direct-to-task notifications, or event groups rath
 |---|---|---|---|
 | GNSS UART | IDLE, error | Clear/report the event; snapshot the GNSS RX DMA producer position | `GPS_Task` |
 | GNSS RX DMA | Half transfer, transfer complete, DMA error | Record buffer progress/error; optionally notify when no IDLE event is expected | `GPS_Task` |
-| LoRa UART | IDLE, error | Clear/report the event; snapshot the LoRa RX DMA producer position | `Telem_Task` |
-| LoRa RX DMA | Half transfer, transfer complete, DMA error | Record buffer progress/error; notify the radio receive state machine | `Telem_Task` |
-| LoRa TX DMA / UART TC | DMA transfer complete; UART transmission complete | Mark the TX buffer available and advance the non-blocking TX state | `Telem_Task` |
+| LoRa UART | IDLE, error | Clear/report the event; snapshot the LoRa RX DMA producer position | `LoRa_Task` |
+| LoRa RX DMA | Half transfer, transfer complete, DMA error | Record buffer progress/error; notify the radio receive state machine | `LoRa_Task` |
+| LoRa TX DMA / UART TC | DMA transfer complete; UART transmission complete | Mark the TX buffer available and advance the non-blocking TX state | `LoRa_Task` |
 | GPS 1PPS (optional) | Rising edge | Capture a timer timestamp; do no serial parsing | Optional timing/diagnostic task |
 
 UART IDLE is useful because it identifies a gap between received messages; DMA half/full-transfer interrupts are still useful as a safety mechanism when a stream has no idle gap. The precise set of enabled events depends on the MCU UART/DMA peripheral and configured data rate.
@@ -80,9 +80,10 @@ The ISR must not parse NMEA, allocate memory, write an SD card, or enqueue a pot
 
 LoRa commands and telemetry payloads are sent with UART TX DMA.
 
-1. `Telem_Task` dequeues a completed telemetry item and formats its UART frame in a stable TX buffer.
-2. It starts TX DMA only when the UART and TX buffer are idle.
-3. The DMA-complete/UART-TC ISR marks the buffer available and advances the non-blocking transmit state machine.
+1. `Telemetry_Builder_Task` copies the latest valid fix and formats a radio frame.
+2. It posts that frame to the bounded LoRa TX mailbox/queue and returns; it never writes the UART or starts DMA directly.
+3. `LoRa_Task` owns the UART, radio protocol state, and TX buffer. It starts TX DMA only when the UART and TX buffer are idle.
+4. The DMA-complete/UART-TC ISR notifies `LoRa_Task`, which marks the buffer available and advances the non-blocking transmit state machine.
 
 The TX buffer must remain unchanged until transmit completion. A queue of buffers, or ownership flag per buffer, prevents a new payload from overwriting an active DMA transfer.
 
@@ -101,15 +102,25 @@ ISRs should be short and deterministic:
 
 Tasks own parsing, queue operations that are not ISR-safe, packet construction, SD writes, retry policies, and error reporting. Shared ISR/task state must be accessed atomically or inside a short critical section.
 
-## Telemetry queue
+## GPS and LoRa handoff policy
 
-The telemetry queue is a software boundary, not a physical connection:
+The incoming GPS path intentionally does **not** queue every parsed fix. `GPS_Task` writes a latest-fix mailbox and sends a direct notification to `Telemetry_Builder_Task`:
 
 ```text
-GNSS fix -> telemetry_queue_push(fix) -> telemetry_process() -> LoRa UART TX DMA
+GPS_Task -> latest_fix mailbox (overwrite stale fix) -> notify builder -> build frame
 ```
 
-Use a fixed-size queue with explicit overflow behavior. Recommended policy: preserve the newest valid navigation fix, increment a dropped-message counter, and expose that counter through the debug console and log.
+This is a **latest-fix-wins** policy. If the builder is busy when several new fixes arrive, it processes the newest one rather than transmitting stale positions later. This is appropriate when current position is more valuable than delivery of every GNSS update.
+
+The builder-to-LoRa boundary is separate:
+
+```text
+Telemetry_Builder_Task -> bounded LoRa TX mailbox/queue -> LoRa_Task -> UART TX DMA
+```
+
+The bounded handoff prevents the builder from overwriting a frame that the LoRa UART DMA is still sending. Define its full behavior explicitly: either replace a waiting unsent position with the newest frame (recommended for position telemetry), or count/drop the new frame. Never overwrite an active DMA TX buffer.
+
+The latest-fix mailbox must be protected against a torn read. Use a short critical section, a mutex, or a version-counter/double-buffer scheme so the builder copies one coherent fix before constructing a packet.
 
 ## DMA and UART configuration checklist
 
@@ -126,7 +137,7 @@ Using DMA does **not** mean the CPU does nothing: firmware still configures thes
 
 ## Logging and USB
 
-GNSS and telemetry work may publish log records into a separate log queue. `SD_Task` drains that queue using non-blocking or bounded operations. USB debug output must likewise be buffered or rate-limited so it cannot delay GNSS parsing or radio service.
+GNSS, telemetry-builder, and LoRa work may publish log records into a separate log queue. `SD_Debug_Task` drains that queue using non-blocking or bounded operations. USB debug output must likewise be buffered or rate-limited so it cannot delay GNSS parsing or radio service.
 
 ## Non-goals and assumptions
 

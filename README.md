@@ -40,11 +40,11 @@ These are initial relative priorities, not final numeric values. Confirm them wi
 
 | Task | Relative priority | Rationale |
 |---|---:|---|
-| `GPS_Task` | High | Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
-| `LoRa_Task` | Medium-high | Services radio responses and ground-station messages without delaying GNSS receive processing. |
-| `Telemetry_Builder_Task` | Medium | Formats the newest fix, but does not own or wait on the UART transfer. |
-| `SD_Debug_Task` | Low | SD writes and debug traffic are non-critical and should yield to flight telemetry. |
-| FreeRTOS idle task | Lowest | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
+| `GPS_Task` | 4| Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
+| `LoRa_Task` | 1 | Services radio responses and ground-station messages without delaying GNSS receive processing. |
+| `Telemetry_Builder_Task` | 2 | Formats the newest fix, but does not own or wait on the UART transfer. |
+| `SD_Debug_Task` | 3 | SD writes and debug traffic are non-critical and should yield to flight telemetry. |
+| FreeRTOS idle task | 0 | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
 
 Tasks should block on queues, direct-to-task notifications, or event groups rather than poll. In particular, `GPS_Task` should be notified whenever the RX DMA producer index advances.
 

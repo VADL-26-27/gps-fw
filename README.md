@@ -30,7 +30,7 @@ FreeRTOS schedules the application work. The drivers remain non-blocking: DMA pe
 | `GPS_Task` | Consume GNSS DMA bytes, parse NMEA/UBX, publish valid fixes | GNSS RX notification |
 | `Telemetry_Builder_Task` | Copy the newest valid fix and build a telemetry frame | latest-fix notification |
 | `LoRa_Task` | Own the RAK3172 protocol, ground-station messages, and UART RX/TX DMA | LoRa RX/TX notification; bounded TX mailbox/queue |
-| `SD_Debug_Task` | Drain logs and provide non-critical debug/USB service | log queue; USB RX notification |
+| `SD_Task` | Drain the shared log queue and write records through FatFs | log queue |
 
 The idle task may enter a low-power mode when all application tasks are blocked.
 
@@ -40,11 +40,13 @@ These are initial relative priorities, not final numeric values. Confirm them wi
 
 | Task | Relative priority | Rationale |
 |---|---:|---|
-| `GPS_Task` | 4| Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
-| `LoRa_Task` | 1 | Services radio responses and ground-station messages without delaying GNSS receive processing. |
-| `Telemetry_Builder_Task` | 2 | Formats the newest fix, but does not own or wait on the UART transfer. |
-| `SD_Debug_Task` | 3 | SD writes and debug traffic are non-critical and should yield to flight telemetry. |
-| FreeRTOS idle task | 0 | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
+| `GPS_Task` | Highest | Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
+| `SD_Task` | Second-highest | Required project priority: promptly drains the log FIFO and starts/completes SDMMC DMA work. |
+| `LoRa_Task` | Medium | Services radio responses and ground-station messages without delaying GPS or SD service. |
+| `Telemetry_Builder_Task` | Low | Formats the newest fix, but does not own or wait on the UART transfer. |
+| FreeRTOS idle task | Lowest | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
+
+`SD_Task` must not perform long CPU-bound work at its elevated priority. Use SDMMC DMA, write bounded batches, and block on completion. FatFs/card erase latency can otherwise delay `LoRa_Task` and `Telemetry_Builder_Task`; the GPS DMA ring and high-priority `GPS_Task` remain the protection against GNSS data loss.
 
 Tasks should block on queues, direct-to-task notifications, or event groups rather than poll. In particular, `GPS_Task` should be notified whenever the RX DMA producer index advances.
 
@@ -122,6 +124,53 @@ The bounded handoff prevents the builder from overwriting a frame that the LoRa 
 
 The latest-fix mailbox must be protected against a torn read. Use a short critical section, a mutex, or a version-counter/double-buffer scheme so the builder copies one coherent fix before constructing a packet.
 
+## Driver ownership and implementation checklist
+
+Each driver has one primary owner. This prevents multiple tasks from modifying the same peripheral state or DMA buffer.
+
+| Component to implement | Primary owner | Required behavior |
+|---|---|---|
+| Board clocks, GPIO alternate functions, NVIC priorities, DMA/DMAMUX routing | board initialization | Configure shared MCU infrastructure before the scheduler starts. |
+| GNSS UART RX circular-DMA driver, IDLE/error ISR | `GPS_Task` | Move continuous receiver bytes into the GNSS ring; notify the task without parsing in the ISR. |
+| NMEA/UBX parser and latest-fix publisher | `GPS_Task` | Validate messages, publish one coherent newest fix, and notify the builder. |
+| Telemetry frame encoder | `Telemetry_Builder_Task` | Copy the latest fix and create a self-contained radio frame. |
+| RAK3172 protocol/state machine | `LoRa_Task` | Own command/response handling, receive events from the ground station, retries, and timeouts. |
+| LoRa UART RX DMA, TX DMA, and completion/error ISRs | `LoRa_Task` | Own UART state and all active TX/RX DMA buffers. |
+| SDMMC/SDIO 4-bit block driver and DMA completion/error ISR | `SD_Task` | Initialize the card and transfer blocks without busy-waiting. |
+| FatFs `diskio` glue, file creation, writes, sync, and log rotation | `SD_Task` | Be the only task that calls FatFs. |
+| Shared logging API | all producer tasks; `SD_Task` consumer | Copy bounded log records into the SD log FIFO. |
+| Optional USB CDC/debug buffering | optional diagnostic service | Keep console service outside the four flight tasks, or remove it from the flight build. |
+
+## Inter-task mailboxes and FIFOs
+
+| Structure | Producer → consumer | Type | Capacity and full behavior |
+|---|---|---|---|
+| `latest_fix` | `GPS_Task` → `Telemetry_Builder_Task` | Latest-value mailbox + direct task notification | One coherent fix. A new fix overwrites an unconsumed older fix. |
+| `lora_pending_tx` | `Telemetry_Builder_Task` → `LoRa_Task` | Latest-value mailbox | One pending telemetry frame. A newer unsent position replaces an older pending position. |
+| `lora_active_tx` | `LoRa_Task` only | Private DMA buffer; **not** a queue | One active transmission. Never modify it until DMA and UART transmission completion. |
+| `sd_log_queue` | GPS, builder, and LoRa tasks → `SD_Task` | Fixed-size FIFO | Preserve record ordering. On full, increment a drop counter and apply the documented log-drop policy. |
+
+The LoRa mailbox is intentionally not a FIFO for routine position data: transmitting the newest position is normally more valuable than transmitting a sequence of stale positions. If the design later has must-deliver messages—such as deployment, fault, or configuration events—add a separate small FIFO for those messages rather than mixing them with replaceable position telemetry.
+
+## Pinout and hardware interfaces
+
+The schematic is the electrical source of truth. This table is an implementation summary for firmware. Pins not yet verified against the schematic remain **TBD** and must not be guessed during driver implementation.
+
+| Function | MCU pin | Peripheral / mode | Primary owner | Notes |
+|---|---|---|---|---|
+| `SD_CLK` | `PC12` | SDMMC/SDIO clock | `SD_Task` | MicroSD native interface. |
+| `SD_CMD` | `PD2` | SDMMC/SDIO command | `SD_Task` | Requires the board's specified pull-up. |
+| `SD_DAT0` | `PC8` | SDMMC/SDIO data 0 | `SD_Task` | Used during initialization and 4-bit operation. |
+| `SD_DAT1` | `PC9` | SDMMC/SDIO data 1 | `SD_Task` | Required for 4-bit operation. |
+| `SD_DAT2` | `PC10` | SDMMC/SDIO data 2 | `SD_Task` | Required for 4-bit operation. |
+| `SD_DAT3` | `PC11` | SDMMC/SDIO data 3 | `SD_Task` | Required for 4-bit operation. |
+| GNSS UART TX/RX | **TBD: verify schematic** | UART with RX DMA | `GPS_Task` | Record UART instance, alternate function, baud rate, and DMA request. |
+| GNSS 1PPS | **TBD: verify schematic** | Timer capture or EXTI | optional timing service | Not required for UART parsing. |
+| LoRa UART TX/RX | **TBD: verify schematic** | UART with RX/TX DMA | `LoRa_Task` | Record UART instance, alternate function, baud rate, and DMA request. |
+| USB D+/D− | **TBD: verify schematic** | USB device / CDC | optional diagnostic service | Optional debug-only interface; not one of the four flight tasks. |
+
+The SD card is connected through SDMMC/SDIO, not SPI. Initialize it in 1-bit mode, then switch to 4-bit mode after card initialization. `CMD` and `DAT0–DAT3` need the pull-ups specified by the board design; do not repurpose `DAT1–DAT3` if using 4-bit mode.
+
 ## DMA and UART configuration checklist
 
 - Enable peripheral, GPIO, DMA/DMAMUX, and interrupt-controller clocks.
@@ -137,7 +186,7 @@ Using DMA does **not** mean the CPU does nothing: firmware still configures thes
 
 ## Logging and USB
 
-GNSS, telemetry-builder, and LoRa work may publish log records into a separate log queue. `SD_Debug_Task` drains that queue using non-blocking or bounded operations. USB debug output must likewise be buffered or rate-limited so it cannot delay GNSS parsing or radio service.
+GNSS, telemetry-builder, and LoRa work may publish log records into a separate log queue. `SD_Task` drains that queue using non-blocking or bounded operations. USB debug output, if enabled, must be buffered or rate-limited and must not be part of `SD_Task`.
 
 ## Non-goals and assumptions
 

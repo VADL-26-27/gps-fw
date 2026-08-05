@@ -87,7 +87,7 @@ Bare-metal register-level access is preferred over HAL for the UART DMA setup, T
 | JU1 — USB-C | +5V_USB, USB_D±, GND | USB | External power, CDC data/debug console, and DFU flashing (via BOOT0 held at reset) — see §5.1 |
 | DH1 — Telemetry Debug Header | SWCLK, SWDIO, UART1_RX, UART1_TX | SWD + 3.3V UART | Debug and telemetry passthrough |
 | JA1 — SMA Port | RF_IN_OUT | RF | Shared GPS/LoRa antenna, routed through MXD8621C |
-| microSD | SD_CLK, SD_CMD, SD_DAT0–3, SD_CD | SDIO (4-bit) | Data logging |
+| microSD | SD_CLK, SD_CMD, SD_DAT0–3, SD_CD | SDIO (4-bit) | Data logging. Connector: Molex 503398-1892 (push-push, SMT, 8-position, with card-detect switch). SD_CD wired to the connector's detect switch — firmware should poll/interrupt on this to confirm card presence before mount attempts in `sd_log_task`, rather than assuming a card is always inserted. |
 | GPIO | `GPS_LNA_EN`, `ANT_SEL` | Digital out | Antenna arbitration (§3) |
 | System | BOOT0 | Digital in | Held high at reset to enter USB DFU bootloader (see §5.1). Must be physically accessible (jumper/button) — confirm placement and default-low pull with hardware lead. |
 

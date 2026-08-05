@@ -1,125 +1,112 @@
-# Nose Cone GPS & Telemetry Module — Firmware
+# Nose Cone GNSS & LoRa Telemetry Firmware
 
-Firmware for the nosecone GNSS + telemetry subsystem (VADL 2026–2027 season). Built around an STM32F411RET6, a u-blox MAX-M10S GNSS receiver, and a RAK3172 LoRa telemetry module — **each with its own dedicated antenna**, no shared RF path.
+Firmware architecture for the nose-cone GNSS receiver and LoRa telemetry interface.
 
-Design Source: [Hardware Design Document](https://vanderbilt365-my.sharepoint.com/:w:/r/personal/evan_s_ticknor_vanderbilt_edu/_layouts/15/Doc.aspx?sourcedoc=%7BDB7462E8-8C19-4EBC-A119-87AD5BF244CF%7D&file=Design%20Specification%20Group%20Report.docx&action=default&mobileredirect=true)
+## Design summary
 
----
+The firmware uses **FreeRTOS for application scheduling** and **bare-metal (self-configured) peripheral drivers**. Here, “bare metal” means the firmware owns the MCU UART, DMA/DMAMUX, GPIO, and NVIC configuration rather than depending on a high-level blocking UART driver. UART data movement uses DMA; interrupts only record progress and wake the appropriate task. No protocol parsing, logging, or blocking transmit is performed inside an interrupt service routine (ISR).
 
-## 1. System Overview
+The GNSS receiver and LoRa radio have independent antennas and independent UARTs. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
 
-The subsystem provides real-time position, velocity, and timing data during ground testing and flight, and downlinks it via LoRa telemetry. GPS and LoRa each have their own independent 50 Ω RF path and antenna connector — there is no shared antenna, no RF switch, and no antenna arbitration logic required in firmware.
-
-**Core hardware:**
-
-| Component | Part | Interface to MCU |
-|---|---|---|
-| MCU | STM32F411RET6 (LQFP-64, up to 100 MHz) | — |
-| GNSS receiver | u-blox MAX-M10S | UART, NMEA 0183 |
-| Telemetry radio | RAK3172 (LoRa) | UART |
-| GPS antenna | Dedicated SMA port (JG) | RF, independent path |
-| LoRa antenna | Dedicated SMA port (J1) | RF, independent path |
-| GPS SAW filter | SAFFB1G56KB0F0AR1X | Passive (in GPS RF path only) |
-| Storage | microSD | SDIO (4-bit) |
-| Debug | SWD + UART1 | Telemetry debug header |
-| Power | NiMH 4.8V 2000mAh → 3.3V LDO | — |
-
-## 2. RTOS
-
-Three tasks run concurrently: GPS UART data streams in continuously and can't be dropped, LoRa telemetry transmits on its own schedule, and SD logging has to keep up with both. Because GPS and LoRa have independent antennas, **there is no handover sequence and no timing-critical antenna arbitration**. GPS reception and LoRa transmission can run fully concurrently without one blocking or interrupting the other.
-
-Current RTOS choice: FreeRTOS (update if another proves necessary)
-
-No microsecond-scale guard timing is required for antenna control. TIM-driven precision timing may still be relevant for other purposes (e.g. GPS_TIMEPULSE / 1PPS handling, see §5), but not for RF path switching.
-
-## 3. Task Architecture
-
-| Task | Responsibility | Priority (suggested) |
-|---|---|---|
-| `gps_task` | Read MAX-M10S UART (DMA + idle-line IRQ), parse NMEA, publish fix data | High |
-| `telem_task` | Own the RAK3172 UART, LoRa scheduling and transmission | Medium-high |
-| `sd_log_task` | Buffer and write GPS/telemetry data to microSD over SDIO | Medium |
-| `housekeeping_task` | Power LED, watchdog kick, fault monitoring | Low |
-
-Inter-task communication: queue for GPS fix data → `sd_log_task`; queue or direct call for telemetry data → `telem_task`. No shared-resource arbitration needed between `gps_task` and `telem_task` since they don't contend for RF hardware.
-
-Bare-metal register-level access is preferred over HAL for the UART DMA setup and GPIO handling, though with the antenna handover removed, the case for bare-metal is now driven primarily by DMA/idle-IRQ throughput needs rather than microsecond timing constraints.
-
-`USB_Task` (CDC debug console + data offload, bench-only) is intentionally not in this table, no queue link to any flight-critical task, kept isolated so a USB hang can't propagate into a reset (SYS-REQ-02). DFU flashing bypasses the RTOS entirely (BOOT0 held at reset drops straight into the ROM bootloader before `main()` runs), so it has no interaction with `USB_Task` or task priorities.
-
-## 4. Interface / Pin Map (from ICD + SDD)
-
-| Connector | Signal(s) | Type | Notes |
-|---|---|---|---|
-| JP1 — Power In | VBAT, GND | Power | 4.8–5V DC (NiMH pack) |
-| JU1 — USB-C | +5V_USB, USB_D±, GND | USB | External power, CDC data/debug console, and DFU flashing (via BOOT0 held at reset) — see §4.1 |
-| DH1 — Telemetry Debug Header | TELEM_SWCLK, TELEM_SWDIO, TELEM_UART1_RX, TELEM_UART1_TX | SWD + 3.3V UART | Debug and telemetry passthrough |
-| JG — SMA Port | GPS_ANT | RF Signal | Dedicated GPS antenna, NMEA 0183 receive path to MAX-M10S |
-| J1 — SMA Port | ANT_1 | RF Signal | Dedicated LoRa antenna, transmit path to RAK3172 |
-| microSD | SD_CLK, SD_CMD, SD_DAT0–3, VDD_MCU, GND | SDIO (4-bit) | Data logging. Connector: Molex 503398-1892 (push-push, SMT, 8-position, with card-detect switch). **Note: SD_CD is not currently listed in the ICD/SDD — confirm with hardware whether the connector's detect switch is actually routed to an MCU pin before relying on it in `sd_log_task`.** |
-| System | BOOT0 | Digital in | Held high (via button) at reset to enter USB DFU bootloader (see §4.1). Physically accessible via a dedicated button — confirmed. Default pull state should rest low; confirm with hardware lead. |
-| Telemetry (RAK3172) | TELEM_UART2_TX (PA9), TELEM_UART2_RX (PA10), TELEM_BOOT0 (PC0), TELEM_RST (PC1) | 3.3V UART, Digital | **`TELEM_BOOT0`/`TELEM_RST` are the RAK3172 module's own boot/reset control pins — distinct from the MCU's `BOOT0` used for DFU.** Don't conflate the two. |
-| GPS | GPS_UART_TX (PC7), GPS_UART_RX (PC6), GPS_TIMEPULSE (PA5), GPS_RESET_1 (PA8) | 3.3V UART, Time pulse, Digital | `GPS_TIMEPULSE` is the MAX-M10S's 1PPS output — useful for precise time sync, not currently used by any task above. Worth deciding whether a task or ISR should consume it. |
-
-### 4.1 USB Roles
-
-JU1 (USB-C, native OTG_FS on PA11/PA12) serves three purposes:
-
-1. **Power** — bench/external 5V in.
-2. **Data / normal STM comms** — CDC-class debug console and telemetry data offload. Primary intended use during bench testing and HIL.
-3. **DFU flashing** — the STM32F411's built-in USB bootloader is reachable by holding `BOOT0` at reset. Functional, but **ST-Link via DH1 (SWD) is the default flash path** — no reason to give up a working, faster flash workflow. DFU is a fallback for situations without an ST-Link on hand (e.g. field firmware updates).
-
-**Future consideration:** USB endpoints not in active use for CDC comms can potentially be reassigned for bulk memory offload (e.g. dumping SD-logged data post-flight over USB rather than pulling the card). Not in scope for V1.0 firmware.
-
-## 5. Power Budget (design targets)
-
-| Component | Idle | Peak Active |
-|---|---|---|
-| MCU (STM32) | 0.5 mA | 37 mA (100 MHz, all peripherals) |
-| Telemetry (RAK3172) | 5.22 mA (RX) | 100 mA (TX) |
-| GPS (MAX-M10S) | 7 mA (tracking) | 15.3 mA (acquisition) |
-| LDO | 0.1 mA | 0.1 mA |
-| SD Card | 1–25 mA | 100–200 mA |
-| Power LED | 1.2 mA | 1.2 mA |
-| **Total** | **39.02 mA** | **353.6 mA** (worst-case SD spike; supply capacity 800 mA) |
-
-Firmware power-mode implications: MCU should drop to STOP mode (~9 µA per trade study) between active GPS/telemetry windows where possible, though the "100% duty cycle" allocation for MCU and GPS in the design doc suggests continuous operation is currently assumed.
-
-Worth revisiting once real duty-cycle/battery-life numbers are needed for the ~6 hour runtime target.
-
-## 6. Requirements Traceability (subset relevant to firmware)
-
-| Req ID | Requirement | Firmware relevance |
-|---|---|---|
-| SYS-REQ-01 | RF Transparency & Downlink, ≥12 dB link margin | Applies independently to each antenna path now — no cross-antenna interference to manage in firmware |
-| SYS-REQ-02 | Vibration resilience, no MCU resets | Watchdog task, brown-out handling |
-
-## 7. Repo Structure (proposed)
+```mermaid
+flowchart TD
+    GNSS["MAX-M10S GNSS receiver\nDedicated GNSS antenna"] -->|"NMEA / UBX bytes"| GPDMA["GNSS UART RX DMA\nCircular buffer"]
+    GPDMA -->|"UART IDLE or DMA event"| GPISR["Short GNSS UART ISR\nSnapshot producer position"]
+    GPISR --> GPS["gps_process()\nConsume bytes and parse fixes"]
+    GPS --> Q["Telemetry queue\nSoftware-only handoff"]
+    Q --> TELEM["telemetry_process()\nBuild radio payload"]
+    TELEM --> LTDMA["LoRa UART TX DMA"]
+    LTDMA --> LORA["RAK3172 LoRa module\nDedicated LoRa antenna"]
 ```
-/src
-/drivers
-usart_gps.c/.h # MAX-M10S UART + DMA, NMEA framing
-usart_lora.c/.h # RAK3172 UART
-sdio.c/.h # microSD driver
-/tasks
-gps_task.c
-telem_task.c
-sd_log_task.c
-housekeeping_task.c
-/rtos
-FreeRTOSConfig.h
-main.c
-/test
-hil/ # Hardware-in-the-loop test scripts
-/docs
-design_spec.docx # source design doc (this README's basis)
+
+## Execution model
+
+FreeRTOS schedules the application work. The drivers remain non-blocking: DMA performs byte movement, an ISR records progress, and the ISR wakes or notifies the waiting task using the ISR-safe FreeRTOS API.
+
+| Task | Responsibility | Inputs |
+|---|---|---|
+| `GPS_Task` | Consume GNSS DMA bytes, parse NMEA/UBX, publish valid fixes | GNSS RX notification |
+| `Telem_Task` | Dequeue fixes, build packets, manage LoRa TX DMA | telemetry queue; LoRa completion/response notification |
+| `SD_Task` | Drain the shared log queue and write records | log queue |
+| `USB_Task` | Debug console and diagnostics | USB RX notification |
+
+The idle task may enter a low-power mode when all application tasks are blocked.
+
+## UART and DMA policy
+
+### GNSS UART receive
+
+GNSS output is continuous, so reception uses a DMA circular buffer.
+
+1. Configure the UART receiver and its DMA request to write into a fixed RAM buffer.
+2. Start DMA once in circular mode; do **not** restart it for every NMEA sentence.
+3. On UART IDLE and/or DMA half-transfer/transfer-complete events, the ISR snapshots the DMA write position and sends an ISR-safe notification to `GPS_Task`.
+4. `GPS_Task` consumes only the newly received byte range, handling circular-buffer wrap, and parses NMEA or UBX in task context.
+
+The ISR must not parse NMEA, allocate memory, write an SD card, or enqueue a potentially blocking LoRa transmission.
+
+### LoRa UART transmit
+
+LoRa commands and telemetry payloads are sent with UART TX DMA.
+
+1. `Telem_Task` dequeues a completed telemetry item and formats its UART frame in a stable TX buffer.
+2. It starts TX DMA only when the UART and TX buffer are idle.
+3. The DMA-complete/UART-TC ISR marks the buffer available and advances the non-blocking transmit state machine.
+
+The TX buffer must remain unchanged until transmit completion. A queue of buffers, or ownership flag per buffer, prevents a new payload from overwriting an active DMA transfer.
+
+### LoRa UART receive
+
+Use RX DMA for the LoRa UART when the RAK3172 can emit responses or unsolicited events. The same circular-buffer and short-ISR pattern as the GNSS receiver applies. If the protocol is strictly request/response, a bounded DMA receive transaction may also be used, but it must have a timeout and recovery path.
+
+## ISR rules
+
+ISRs should be short and deterministic:
+
+- acknowledge the peripheral/DMA event;
+- snapshot the DMA producer index or completion status;
+- update a `volatile` flag or ring-buffer index; and
+- return.
+
+Tasks own parsing, queue operations that are not ISR-safe, packet construction, SD writes, retry policies, and error reporting. Shared ISR/task state must be accessed atomically or inside a short critical section.
+
+## Telemetry queue
+
+The telemetry queue is a software boundary, not a physical connection:
+
+```text
+GNSS fix -> telemetry_queue_push(fix) -> telemetry_process() -> LoRa UART TX DMA
 ```
-## 8. Open Items From the Design Doc
 
-- Mounting holes, RF shielding, thermal dissipation: flagged as "layout stage" — not yet finalized, no firmware dependency yet.
-- SD card connector confirmed: Molex 503398-1892 (push-push, 8-position, with card-detect switch). The actual microSD card part (capacity, speed class) is still TBD — max SDIO clock, write latency, and buffering/queue sizing in `sd_log_task` depend on that choice once made. **SD_CD routing to the MCU is unconfirmed — not present in the ICD/SDD tables.**
-- Test point definitions and HIL coverage plan are placeholders in the source doc — need to be filled in before verification can start (SYS-REQ-02 vibration testing depends on this).
-- BOOT0 physical accessibility confirmed — dedicated button. Default pull state (should rest low) still needs confirmation from hardware lead.
-- `GPS_TIMEPULSE` (1PPS) is wired but not currently assigned to any task — decide if/how firmware should consume it for time sync.
+Use a fixed-size queue with explicit overflow behavior. Recommended policy: preserve the newest valid navigation fix, increment a dropped-message counter, and expose that counter through the debug console and log.
 
----
+## DMA and UART configuration checklist
+
+- Enable peripheral, GPIO, DMA/DMAMUX, and interrupt-controller clocks.
+- Configure UART pins, baud rate, word length, parity, stop bits, and RX/TX enable.
+- Select the correct UART-to-DMA request mapping.
+- Place DMA buffers in memory accessible to DMA and aligned as required by the MCU.
+- Configure GNSS RX DMA as circular; configure LoRa TX DMA as normal mode per frame.
+- Enable and prioritize UART IDLE/error and DMA completion interrupts.
+- Clear stale UART error conditions and define recovery for overrun, framing, DMA, and radio-response timeouts.
+- If the MCU has a data cache, perform the required cache maintenance around DMA buffers.
+
+Using DMA does **not** mean the CPU does nothing: firmware still configures these peripherals, manages buffer ownership, and handles completion/error events. DMA simply moves UART bytes without a CPU interrupt for every byte.
+
+## Logging and USB
+
+GNSS and telemetry work may publish log records into a separate log queue. `SD_Task` drains that queue using non-blocking or bounded operations. USB debug output must likewise be buffered or rate-limited so it cannot delay GNSS parsing or radio service.
+
+## Non-goals and assumptions
+
+- There is no shared GNSS/LoRa antenna and therefore no antenna switching logic.
+- `GPS_TIMEPULSE` / 1PPS is optional and currently unassigned. It may later feed a timer capture input for precise timestamping; it is not required for UART GNSS parsing.
+- RTOS queues and task notifications are used for application handoff; low-level drivers do not block waiting for UART bytes or transmit completion.
+
+## Acceptance checks
+
+- GNSS data remains loss-free at the configured output rate while LoRa transmissions and SD logging occur.
+- UART ISRs perform no parsing or blocking I/O.
+- DMA buffers are never modified before their transfer has completed.
+- Queue overflow, UART errors, and LoRa timeouts are observable and recover without a reset.
+- ISR-to-task notifications use only the ISR-safe FreeRTOS APIs and request a context switch when required.

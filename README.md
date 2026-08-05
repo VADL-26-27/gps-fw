@@ -2,11 +2,24 @@
 
 Firmware architecture for the nose-cone GNSS receiver and LoRa telemetry interface.
 
+**Target MCU:** STM32F411RET6 (STM32F411xE family, LQFP64).
+
 ## Design summary
 
 The firmware uses **FreeRTOS for application scheduling** and **bare-metal (self-configured) peripheral drivers**. Here, “bare metal” means the firmware owns the MCU UART, DMA/DMAMUX, GPIO, and NVIC configuration rather than depending on a high-level blocking UART driver. UART data movement uses DMA; interrupts only record progress and wake the appropriate task. No protocol parsing, logging, or blocking transmit is performed inside an interrupt service routine (ISR).
 
 The GNSS receiver and LoRa radio have independent antennas and independent UARTs. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
+
+### Confirmed interface settings
+
+| Interface | Setting | Value |
+|---|---|---|
+| GNSS UART | Baud rate | 9,600 bit/s |
+| RAK3172 LoRa UART | Baud rate | 115,200 bit/s |
+| Telemetry payload/framing format | Definition | **TBD** |
+| SD log record/file format | Definition | **TBD** |
+
+Unless the module datasheets specify otherwise, validate 8 data bits, no parity, and 1 stop bit (8-N-1) during board bring-up.
 
 ```mermaid
 flowchart TD
@@ -130,7 +143,7 @@ Each driver has one primary owner. This prevents multiple tasks from modifying t
 
 | Component to implement | Primary owner | Required behavior |
 |---|---|---|
-| Board clocks, GPIO alternate functions, NVIC priorities, DMA/DMAMUX routing | board initialization | Configure shared MCU infrastructure before the scheduler starts. |
+| Board clocks, GPIO alternate functions, NVIC priorities, and DMA stream/channel selection | board initialization | Configure shared MCU infrastructure before the scheduler starts. |
 | GNSS UART RX circular-DMA driver, IDLE/error ISR | `GPS_Task` | Move continuous receiver bytes into the GNSS ring; notify the task without parsing in the ISR. |
 | NMEA/UBX parser and latest-fix publisher | `GPS_Task` | Validate messages, publish one coherent newest fix, and notify the builder. |
 | Telemetry frame encoder | `Telemetry_Builder_Task` | Copy the latest fix and create a self-contained radio frame. |
@@ -143,7 +156,9 @@ Each driver has one primary owner. This prevents multiple tasks from modifying t
 
 ### Required driver layers
 
-The two main hardware data-plane drivers to implement are the **UART/DMA driver** and the **SDMMC/SDIO + DMA driver**. They share the same supporting board configuration: clocks, GPIO alternate functions, DMA/DMAMUX request routing, cache handling if present, and NVIC interrupt configuration.
+The two main hardware data-plane drivers to implement are the **UART/DMA driver** and the **SDMMC/SDIO + DMA driver**. They share the same supporting board configuration: clocks, GPIO alternate functions, DMA stream/channel selection, and NVIC interrupt configuration.
+
+The STM32F411RET6 does **not** have a DMAMUX peripheral. Each DMA stream selects one of its supported peripheral requests using the `CHSEL[2:0]` field in `DMA_SxCR`; the legal DMA controller/stream/channel combinations must be taken from the STM32F411 reference manual. Allocate non-conflicting streams for GNSS UART RX, LoRa UART RX, LoRa UART TX, and SDIO DMA before implementation.
 
 #### UART/DMA driver
 
@@ -181,12 +196,15 @@ SD_Task -> FatFs -> diskio adapter -> SDMMC/SDIO + DMA driver -> microSD card
 
 | Structure | Producer → consumer | Type | Capacity and full behavior |
 |---|---|---|---|
-| `latest_fix` | `GPS_Task` → `Telemetry_Builder_Task` | Latest-value mailbox + direct task notification | One coherent fix. A new fix overwrites an unconsumed older fix. |
-| `lora_pending_tx` | `Telemetry_Builder_Task` → `LoRa_Task` | Latest-value mailbox | One pending telemetry frame. A newer unsent position replaces an older pending position. |
-| `lora_active_tx` | `LoRa_Task` only | Private DMA buffer; **not** a queue | One active transmission. Never modify it until DMA and UART transmission completion. |
-| `sd_log_queue` | GPS, builder, and LoRa tasks → `SD_Task` | Fixed-size FIFO | Preserve record ordering. On full, increment a drop counter and apply the documented log-drop policy. |
+| `latest_fix` | `GPS_Task` → `Telemetry_Builder_Task` | Latest-value mailbox + direct task notification | One coherent fix structure; use a double buffer or version counter. A new fix overwrites an unconsumed older fix. |
+| GNSS RX DMA ring | GNSS UART DMA → `GPS_Task` | Circular byte ring | **1,024 bytes**, about 1.07 s of continuous serial data at 9,600 bit/s. |
+| LoRa RX DMA ring | LoRa UART DMA → `LoRa_Task` | Circular byte ring | **1,024 bytes**, about 89 ms at 115,200 bit/s; tune against the longest expected RAK3172 response/event. |
+| `lora_pending_tx` | `Telemetry_Builder_Task` → `LoRa_Task` | Latest-value mailbox | One pending telemetry frame, initially **256 bytes maximum**. A newer unsent position replaces an older pending position. |
+| `lora_active_tx` | `LoRa_Task` only | Private DMA buffer; **not** a queue | One active **256-byte** maximum transmission. Never modify it until DMA and UART transmission completion. |
+| `sd_log_queue` | GPS, builder, and LoRa tasks → `SD_Task` | Fixed-size FIFO | Initially **32 × 128-byte records** (4 KiB). Preserve record ordering; on full, increment a drop counter and apply the documented log-drop policy. |
+| SD block staging buffers | `SD_Task` only | Private DMA buffers | At least **two 512-byte sector buffers**; use a larger aggregation buffer later if log throughput requires it. |
 
-The LoRa mailbox is intentionally not a FIFO for routine position data: transmitting the newest position is normally more valuable than transmitting a sequence of stale positions. If the design later has must-deliver messages—such as deployment, fault, or configuration events—add a separate small FIFO for those messages rather than mixing them with replaceable position telemetry.
+The stated capacities are safe initial integration values, not protocol limits. Confirm them using the actual maximum GNSS sentence size, RAK3172 response length, telemetry frame definition, logging rate, and worst-case SD-card write latency. The LoRa mailbox is intentionally not a FIFO for routine position data: transmitting the newest position is normally more valuable than transmitting a sequence of stale positions. If the design later has must-deliver messages—such as deployment, fault, or configuration events—add a separate small FIFO for those messages rather than mixing them with replaceable position telemetry.
 
 ## Pinout and hardware interfaces
 
@@ -200,9 +218,9 @@ The schematic is the electrical source of truth. This table is an implementation
 | `SD_DAT1` | `PC9` | SDMMC/SDIO data 1 | `SD_Task` | Required for 4-bit operation. |
 | `SD_DAT2` | `PC10` | SDMMC/SDIO data 2 | `SD_Task` | Required for 4-bit operation. |
 | `SD_DAT3` | `PC11` | SDMMC/SDIO data 3 | `SD_Task` | Required for 4-bit operation. |
-| GNSS UART TX/RX | **TBD: verify schematic** | UART with RX DMA | `GPS_Task` | Record UART instance, alternate function, baud rate, and DMA request. |
+| GNSS UART TX/RX | **TBD: verify schematic** | UART with RX DMA | `GPS_Task` | 9,600 bit/s; record UART instance, alternate function, and STM32F411 DMA stream/channel. |
 | GNSS 1PPS | **TBD: verify schematic** | Timer capture or EXTI | optional timing service | Not required for UART parsing. |
-| LoRa UART TX/RX | **TBD: verify schematic** | UART with RX/TX DMA | `LoRa_Task` | Record UART instance, alternate function, baud rate, and DMA request. |
+| LoRa UART TX/RX | **TBD: verify schematic** | UART with RX/TX DMA | `LoRa_Task` | 115,200 bit/s; record UART instance, alternate function, and STM32F411 DMA stream/channel. |
 | USB D+/D− | **TBD: verify schematic** | USB device / CDC | optional diagnostic service | Optional debug-only interface; not one of the four flight tasks. |
 
 The SD card is connected through SDMMC/SDIO, not SPI. Initialize it in 1-bit mode, then switch to 4-bit mode after card initialization. `CMD` and `DAT0–DAT3` need the pull-ups specified by the board design; do not repurpose `DAT1–DAT3` if using 4-bit mode.
@@ -219,6 +237,48 @@ The SD card is connected through SDMMC/SDIO, not SPI. Initialize it in 1-bit mod
 - If the MCU has a data cache, perform the required cache maintenance around DMA buffers.
 
 Using DMA does **not** mean the CPU does nothing: firmware still configures these peripherals, manages buffer ownership, and handles completion/error events. DMA simply moves UART bytes without a CPU interrupt for every byte.
+
+## Startup, fault recovery, and degraded operation
+
+The system must continue operating when a non-critical peripheral is absent or temporarily fails. Initialization and recovery are state machines with finite timeouts; no task may wait forever for a card, GNSS fix, radio response, or DMA completion.
+
+### Startup sequence
+
+1. Configure clocks, GPIO, NVIC priorities, DMA streams/channels, and the independent watchdog.
+2. Create the four application tasks and their notifications/mailboxes/FIFOs.
+3. Start GNSS UART circular RX DMA, then allow `GPS_Task` to wait for and parse valid data at 9,600 bit/s.
+4. Start LoRa UART RX DMA, then let `LoRa_Task` probe/configure the RAK3172 at 115,200 bit/s using bounded command-response timeouts.
+5. Let `SD_Task` initialize SDMMC, initialize the card in 1-bit mode, switch to 4-bit mode, and mount FatFs. SD failure does not prevent the scheduler or telemetry from starting.
+6. Begin normal service. Each task blocks when idle and reports health to the watchdog supervisor.
+
+### Peripheral recovery policy
+
+| Condition | Normal/degraded behavior | Recovery action |
+|---|---|---|
+| SD card absent, initialization failure, or FatFs mount failure | Set SD state to `OFFLINE`; continue GNSS and LoRa telemetry without persistent logging. Increment a log-drop counter rather than accumulating logs indefinitely in RAM. | Retry initialization/mount periodically (initially every 5–10 s). On recovery, open/create the log and write a status/recovery record. |
+| No GNSS data or no valid fix | `GPS_Task` continues draining/parsing the UART DMA ring. Telemetry is marked `GNSS_INVALID` or omits position fields until a valid fix exists. | After a bounded no-fix timeout, report the condition. Reconfigure or reset the GNSS module only after a limited number of failed recovery attempts. |
+| RAK3172 command timeout or radio unresponsive | Set LoRa state to `OFFLINE`; do not block other tasks. Keep only the newest pending position in `lora_pending_tx`. | Retry a limited number of probes/commands; if supported, hardware-reset or power-cycle the module. Use increasing retry delays before returning to normal service. |
+| UART overrun, framing, noise, or parity error | Count and report the error. Discard incomplete protocol data and resume only from a later valid frame boundary. | Clear UART error state, snapshot/reset RX bookkeeping, and restart the associated RX DMA stream when required by the peripheral. |
+| DMA transfer error or completion timeout | Count and report the error; affected task remains responsive. | Disable the DMA stream, wait until it is actually disabled, clear DMA status flags, reset indices, reconfigure the stream, and restart it. Escalate to a UART/SDMMC peripheral reset after repeated failures. |
+
+Use visible state values for diagnostics:
+
+```text
+SD:    OFFLINE -> INITIALIZING -> READY -> ERROR/RETRYING
+GNSS:  STARTING -> NO_FIX -> VALID_FIX -> ERROR/RETRYING
+LoRa:  STARTING -> READY -> WAITING_RESPONSE -> OFFLINE/RETRYING
+```
+
+### Independent watchdog policy
+
+Use the STM32F411 independent watchdog (IWDG) as a last-resort recovery mechanism. A short supervisory function is the only code allowed to refresh it. It refreshes the IWDG only after receiving recent health indications from the critical execution paths:
+
+- FreeRTOS scheduler/tick is running.
+- `GPS_Task` is alive and able to service its DMA ring.
+- `LoRa_Task` is alive and can run its state machine.
+- `SD_Task` is alive **only when an SD operation is actively in progress**; an absent or unmounted SD card must not cause a watchdog reset.
+
+Each task sets a health bit only after completing a bounded unit of work or waking from its normal wait. The supervisor clears/checks these bits once per watchdog window. If a critical task stops executing, the IWDG is not refreshed and resets the MCU into the normal startup sequence. Log/reset-cause information should be retained and emitted after reboot when storage or telemetry becomes available.
 
 ## Logging and USB
 

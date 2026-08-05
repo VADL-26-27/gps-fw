@@ -32,6 +32,35 @@ FreeRTOS schedules the application work. The drivers remain non-blocking: DMA pe
 
 The idle task may enter a low-power mode when all application tasks are blocked.
 
+### Proposed task priorities
+
+These are initial relative priorities, not final numeric values. Confirm them with measured GNSS throughput, LoRa response deadlines, SD-card worst-case write latency, and the project's `configMAX_PRIORITIES` setting.
+
+| Task | Relative priority | Rationale |
+|---|---:|---|
+| `GPS_Task` | High | Must promptly drain the GNSS DMA ring so continuous serial data cannot overrun it. |
+| `Telem_Task` | Medium-high | Services radio responses and sends queued telemetry without delaying GNSS receive processing. |
+| `SD_Task` | Low | SD-card writes can be slow and must not interfere with GNSS or radio servicing. |
+| `USB_Task` | Low | Debug/console traffic is non-critical and should yield to flight telemetry. |
+| FreeRTOS idle task | Lowest | Reclaims deleted-task memory if enabled and is the natural low-power idle point. |
+
+Tasks should block on queues, direct-to-task notifications, or event groups rather than poll. In particular, `GPS_Task` should be notified whenever the RX DMA producer index advances.
+
+### Interrupt ownership and behavior
+
+| Interrupt source | Typical event | ISR responsibility | Task notified |
+|---|---|---|---|
+| GNSS UART | IDLE, error | Clear/report the event; snapshot the GNSS RX DMA producer position | `GPS_Task` |
+| GNSS RX DMA | Half transfer, transfer complete, DMA error | Record buffer progress/error; optionally notify when no IDLE event is expected | `GPS_Task` |
+| LoRa UART | IDLE, error | Clear/report the event; snapshot the LoRa RX DMA producer position | `Telem_Task` |
+| LoRa RX DMA | Half transfer, transfer complete, DMA error | Record buffer progress/error; notify the radio receive state machine | `Telem_Task` |
+| LoRa TX DMA / UART TC | DMA transfer complete; UART transmission complete | Mark the TX buffer available and advance the non-blocking TX state | `Telem_Task` |
+| GPS 1PPS (optional) | Rising edge | Capture a timer timestamp; do no serial parsing | Optional timing/diagnostic task |
+
+UART IDLE is useful because it identifies a gap between received messages; DMA half/full-transfer interrupts are still useful as a safety mechanism when a stream has no idle gap. The precise set of enabled events depends on the MCU UART/DMA peripheral and configured data rate.
+
+On Cortex-M, a **smaller numeric NVIC value means a higher hardware interrupt priority**. Any ISR that calls `xTaskNotifyFromISR()`, `xQueueSendFromISR()`, or another `...FromISR()` FreeRTOS API must be assigned an NVIC priority permitted by `configMAX_SYSCALL_INTERRUPT_PRIORITY`. Do not choose raw numeric NVIC priorities until that FreeRTOS configuration and the MCU's implemented priority bits are known.
+
 ## UART and DMA policy
 
 ### GNSS UART receive

@@ -6,7 +6,7 @@ Firmware architecture for the nose-cone GNSS receiver and LoRa telemetry interfa
 
 The firmware uses **FreeRTOS for application scheduling** and **bare-metal (self-configured) peripheral drivers**. Here, “bare metal” means the firmware owns the MCU UART, DMA/DMAMUX, GPIO, and NVIC configuration rather than depending on a high-level blocking UART driver. UART data movement uses DMA; interrupts only record progress and wake the appropriate task. No protocol parsing, logging, or blocking transmit is performed inside an interrupt service routine (ISR).
 
-The GNSS receiver and LoRa radio have independent antennas and independent UARTs. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
+The GNSS receiver and LoRa radio have independent antennas and independent UART lines. Consequently, GNSS reception and LoRa transmission do not require antenna arbitration or a shared RF timing lock.
 
 ```mermaid
 flowchart TD

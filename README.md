@@ -16,6 +16,7 @@ The GNSS receiver and LoRa radio have independent antennas and independent UARTs
 |---|---|---|
 | GNSS UART | Baud rate | 9,600 bit/s |
 | RAK3172 LoRa UART | Baud rate | 115,200 bit/s |
+| RAK3172 network mode | Radio mode | LoRa P2P |
 | Telemetry payload/framing format | Definition | **TBD** |
 | SD log record/file format | Definition | **TBD** |
 
@@ -199,8 +200,8 @@ SD_Task -> FatFs -> diskio adapter -> SDMMC/SDIO + DMA driver -> microSD card
 | `latest_fix` | `GPS_Task` → `Telemetry_Builder_Task` | Latest-value mailbox + direct task notification | One coherent fix structure; use a double buffer or version counter. A new fix overwrites an unconsumed older fix. |
 | GNSS RX DMA ring | GNSS UART DMA → `GPS_Task` | Circular byte ring | **1,024 bytes**, about 1.07 s of continuous serial data at 9,600 bit/s. |
 | LoRa RX DMA ring | LoRa UART DMA → `LoRa_Task` | Circular byte ring | **1,024 bytes**, about 89 ms at 115,200 bit/s; tune against the longest expected RAK3172 response/event. |
-| `lora_pending_tx` | `Telemetry_Builder_Task` → `LoRa_Task` | Latest-value mailbox | One pending telemetry frame, initially **256 bytes maximum**. A newer unsent position replaces an older pending position. |
-| `lora_active_tx` | `LoRa_Task` only | Private DMA buffer; **not** a queue | One active **256-byte** maximum transmission. Never modify it until DMA and UART transmission completion. |
+| `lora_pending_tx` | `Telemetry_Builder_Task` → `LoRa_Task` | Latest-value mailbox | One pending **binary P2P payload**, maximum **255 bytes**. A newer unsent position replaces an older pending position. |
+| `lora_active_tx` | `LoRa_Task` only | Private DMA buffer; **not** a queue | One active UART command buffer, initially **544 bytes**. A 255-byte binary payload is hex-encoded for `AT+PSEND=`, requiring up to 521 serial characters including command prefix and line ending. Never modify it until DMA and UART transmission completion. |
 | `sd_log_queue` | GPS, builder, and LoRa tasks → `SD_Task` | Fixed-size FIFO | Initially **32 × 128-byte records** (4 KiB). Preserve record ordering; on full, increment a drop counter and apply the documented log-drop policy. |
 | SD block staging buffers | `SD_Task` only | Private DMA buffers | At least **two 512-byte sector buffers**; use a larger aggregation buffer later if log throughput requires it. |
 
@@ -237,6 +238,48 @@ The SD card is connected through SDMMC/SDIO, not SPI. Initialize it in 1-bit mod
 - If the MCU has a data cache, perform the required cache maintenance around DMA buffers.
 
 Using DMA does **not** mean the CPU does nothing: firmware still configures these peripherals, manages buffer ownership, and handles completion/error events. DMA simply moves UART bytes without a CPU interrupt for every byte.
+
+## LoRa P2P state machine
+
+`LoRa_Task` owns the RAK3172 UART and runs a non-blocking state machine. It is the only task permitted to send AT commands or inspect RAK3172 responses/events. `Telemetry_Builder_Task` only replaces the `lora_pending_tx` mailbox.
+
+```mermaid
+stateDiagram-v2
+    [*] --> OFFLINE
+    OFFLINE --> UART_SYNC: retry timer expires
+    UART_SYNC --> CONFIGURE_P2P: AT / version response is valid
+    UART_SYNC --> OFFLINE: timeout or retry limit
+    CONFIGURE_P2P --> RX_ARM: P2P configuration accepted
+    CONFIGURE_P2P --> WAIT_MODULE_REBOOT: mode change resets module
+    WAIT_MODULE_REBOOT --> UART_SYNC: boot banner or timeout
+    RX_ARM --> RX_LISTEN: AT+PRECV accepted
+    RX_LISTEN --> PROCESS_RX: ground-station event received
+    PROCESS_RX --> RX_ARM: command/event handled
+    RX_LISTEN --> RX_STOP: pending telemetry exists
+    RX_LISTEN --> RX_ARM: receive window timeout
+    RX_STOP --> SEND_TELEMETRY: AT+PRECV=0 accepted
+    SEND_TELEMETRY --> WAIT_TX_RESULT: AT+PSEND DMA started
+    WAIT_TX_RESULT --> RX_ARM: response accepted
+    WAIT_TX_RESULT --> RECOVER: timeout or error
+    RECOVER --> UART_SYNC: retries remain
+    RECOVER --> OFFLINE: retry limit reached
+```
+
+### State behavior
+
+| State | Action and exit condition |
+|---|---|
+| `OFFLINE` | The module is unavailable. Keep only the newest pending telemetry payload and retry after a backoff delay. |
+| `UART_SYNC` | Send `AT` and query firmware/version as required. Enter `CONFIGURE_P2P` only after the expected response is parsed. |
+| `CONFIGURE_P2P` | Verify/set P2P mode and the project-selected frequency, spreading factor, bandwidth, coding rate, preamble, and power. These RF values remain **TBD** and must be legal for the operating region. A mode change may reboot the module. |
+| `RX_ARM` | Send `AT+PRECV=<configured receive window>` and wait for its acknowledgement. |
+| `RX_LISTEN` | Parse ground-station events and received payloads. If the receive window ends or a packet ends receive mode, explicitly re-arm it. |
+| `RX_STOP` | Before transmit or reconfiguration, send `AT+PRECV=0` and wait for acknowledgement. This leaves P2P receive mode cleanly. |
+| `SEND_TELEMETRY` | Hex-encode the newest binary payload into `AT+PSEND=<hex>`, then use UART TX DMA to submit the command. |
+| `WAIT_TX_RESULT` | Wait with a finite timeout for the success/error response. On success re-enter `RX_ARM`; on error use bounded retry/recovery. |
+| `RECOVER` | Clear parser/driver state, retry UART synchronization/configuration, and hardware-reset or power-cycle the RAK3172 if that control is available. |
+
+Continuous receive mode must be stopped before a transmit/configuration command; otherwise the module can report a busy error. A P2P payload is at most 255 bytes, and UART encoding is hexadecimal, so `LoRa_Task` must build the larger ASCII AT command in its private active TX buffer. Ground-station payload parsing and authorization rules are **TBD**; no received command should change radio configuration or flight behavior until that command protocol is specified.
 
 ## Startup, fault recovery, and degraded operation
 

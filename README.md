@@ -141,6 +141,42 @@ Each driver has one primary owner. This prevents multiple tasks from modifying t
 | Shared logging API | all producer tasks; `SD_Task` consumer | Copy bounded log records into the SD log FIFO. |
 | Optional USB CDC/debug buffering | optional diagnostic service | Keep console service outside the four flight tasks, or remove it from the flight build. |
 
+### Required driver layers
+
+The two main hardware data-plane drivers to implement are the **UART/DMA driver** and the **SDMMC/SDIO + DMA driver**. They share the same supporting board configuration: clocks, GPIO alternate functions, DMA/DMAMUX request routing, cache handling if present, and NVIC interrupt configuration.
+
+#### UART/DMA driver
+
+Use one reusable UART/DMA driver implementation with a separate configuration instance for the GNSS UART and the LoRa UART. Each instance configures the UART registers, GPIO alternate functions, RX circular-DMA buffer, TX DMA transfers, UART IDLE/error interrupt, DMA completion/error interrupt, and ISR-safe task notification.
+
+`GPS_Task` owns the GNSS instance. `LoRa_Task` owns the LoRa instance; it also implements the higher-level RAK3172 command/response and ground-station-message protocol above the UART driver.
+
+#### SDMMC/SDIO + DMA driver
+
+`SD_Task` owns the microSD driver. It configures the six SDMMC pins below, initializes the card in 1-bit mode, changes to 4-bit mode after initialization, sends SD-card commands, and starts/handles DMA block reads and writes.
+
+```text
+PC12  -> SD_CLK
+PD2   -> SD_CMD
+PC8   -> SD_DAT0
+PC9   -> SD_DAT1
+PC10  -> SD_DAT2
+PC11  -> SD_DAT3
+```
+
+The SDMMC driver exposes bounded block operations such as `sd_read_blocks()` and `sd_write_blocks()`. FatFs is not the physical card driver: it is the filesystem layer above the driver. A small FatFs `diskio` adapter translates FatFs sector read/write requests into these SDMMC block operations.
+
+```text
+SD_Task -> FatFs -> diskio adapter -> SDMMC/SDIO + DMA driver -> microSD card
+```
+
+#### What is not an additional custom driver
+
+- FatFs manages files and directories; it is a library plus a thin `diskio` adapter, not an SD-card hardware driver.
+- The RAK3172 protocol state machine is an application-layer module on top of the LoRa UART driver, not a second UART driver.
+- FreeRTOS supplies task scheduling and synchronization; the project configures its port and interrupt priorities but does not need to write a scheduler.
+- A timer-capture/EXTI driver is needed only if the optional GPS 1PPS signal is used. USB support is likewise optional.
+
 ## Inter-task mailboxes and FIFOs
 
 | Structure | Producer → consumer | Type | Capacity and full behavior |

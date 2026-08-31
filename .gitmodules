@@ -1,0 +1,6 @@
+[submodule "vadl-flash-tools"]
+	path = vadl-flash-tools
+	url = https://github.com/VADL-26-27/vadl-flash-tools.git
+[submodule "rtos"]
+	path = rtos
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git

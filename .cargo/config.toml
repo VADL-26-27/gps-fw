@@ -1,0 +1,9 @@
+[build]
+target = "thumbv7em-none-eabihf"   
+
+[target.thumbv7em-none-eabihf]
+rustflags = [
+    "-C", "link-arg=-Tlink.x",     # tell the linker to use cortex-m-rt's link.x script
+    "-C", "link-arg=--nmagic",     # disable page alignment (saves flash space on bare metal)
+]
+runner = "probe-rs run --chip stm32f446retx"   # `cargo run` will flash and run

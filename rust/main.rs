@@ -147,7 +147,7 @@ fn main() -> ! {
 
     let mut sd_transfer = Transfer::init_memory_to_peripheral(
         dma2.3,
-        sdio,
+        ,
         sd_buffer,
         None,
         dma::config::DmaConfig::default()

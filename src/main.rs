@@ -6,7 +6,7 @@ use cortex_m_semihosting::{hprint, hprintln};
 use panic_semihosting as _;
 
 use stm32f4xx_hal::{
-    dma::MemoryToPeripheral, pac, prelude::*, rcc::Config, sdio::{ClockFreq, SdCard, Sdio}
+    dma::{MemoryToPeripheral, StreamsTuple, Transfer}, gpio::alt::sdio, pac, prelude::*, rcc::Config, sdio::{ClockFreq, SdCard, Sdio}
 };
 
 use stm32f4xx_hal::dma;
@@ -100,10 +100,10 @@ pub fn log_read_until(eol: u8) -> Option<[u8; SD_BUFFER_SIZE]> {
 
 #[entry]
 fn main() -> ! {
-    let device = pac::Peripherals::take().unwrap();
-    let core = cortex_m::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap();
+    let cp = cortex_m::Peripherals::take().unwrap();
 
-    let mut rcc = device.RCC.freeze(
+    let mut rcc = dp.RCC.freeze(
         Config::hse(12.MHz())
             .require_pll48clk()
             .sysclk(168.MHz())
@@ -114,10 +114,13 @@ fn main() -> ! {
 
     assert!(rcc.clocks.is_pll48clk_valid());
 
-    let mut delay = core.SYST.delay(&rcc.clocks);
+    let mut delay = cp.SYST.delay(&rcc.clocks);
 
-    let gpioc = device.GPIOC.split(&mut rcc);
-    let gpiod = device.GPIOD.split(&mut rcc);
+    let gpioc = dp.GPIOC.split(&mut rcc);
+    let gpiod = dp.GPIOD.split(&mut rcc);
+
+    // gives a tuple of all streams on DMA2 and starts clock
+    let dma2 = StreamsTuple::new(dp.DMA2, &mut rcc);
 
     let d0 = gpioc.pc8.internal_pull_up(true);
     let d1 = gpioc.pc9.internal_pull_up(true);
@@ -125,7 +128,8 @@ fn main() -> ! {
     let d3 = gpioc.pc11.internal_pull_up(true);
     let clk = gpioc.pc12;
     let cmd = gpiod.pd2.internal_pull_up(true);
-    let mut sdio: Sdio<SdCard> = Sdio::new(device.SDIO, (clk, cmd, d0, d1, d2, d3), &mut rcc);
+
+    let mut sdio: Sdio<SdCard> = Sdio::new(dp.SDIO, (clk, cmd, d0, d1, d2, d3), &mut rcc);
 
     hprintln!("Waiting for card...");
 
@@ -138,6 +142,20 @@ fn main() -> ! {
 
         delay.delay_ms(1000);
     }
+
+    let sd_buffer = cortex_m::singleton!(: [u8; SD_BUFFER_SIZE] = [0; SD_BUFFER_SIZE]).unwrap();
+
+    let mut sd_transfer = Transfer::init_memory_to_peripheral(
+        dma2.3,
+        sdio,
+        sd_buffer,
+        None,
+        dma::config::DmaConfig::default()
+            .memory_increment(true)
+            .fifo_enable(true)
+            .fifo_error_interrupt(true)
+            .transfer_complete_interrupt(true),
+    );
 
     let nblocks = sdio.card().map(|c| c.block_count()).unwrap_or(0);
     hprintln!("Card detected: nbr of blocks: {:?}", nblocks);

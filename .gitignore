@@ -1,4 +1,4 @@
 build/
 .vscode/
-sd_example/target/
-target/
+tmp/
+compile_commands.json

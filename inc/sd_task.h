@@ -4,7 +4,10 @@
 #include <stdint.h>
 
 #include "stm32f4xx.h"
+#include "stm32f4xx_hal_sd.h"
 
-void SD_Task(void);
+extern SD_HandleTypeDef hsd;
+
+HAL_StatusTypeDef SD_Init(void);
 
 #endif /* SD_TASK_H */

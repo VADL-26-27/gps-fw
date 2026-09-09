@@ -3,7 +3,7 @@
 #include "stm32f4xx_hal_dma.h"
 #include "sd_task.h"
 
-static SD_HandleTypeDef hsd;        // handler sd
+SD_HandleTypeDef hsd;        // handler sd
 static DMA_HandleTypeDef hdma_tx;   // handler dma
 
 static void SD_GPIO_Init(void)
@@ -89,7 +89,7 @@ static void SD_DMA_Init(void)
     HAL_DMA_Init(&hdma_tx);
     __HAL_LINKDMA(&hsd, hdmatx, hdma_tx);
 
-    // DMA transfer and SDIO transactions take unpredictable time, this is for non-blocking
+    // NVIC allows DMA transfer and SDIO transactions to be non-blocking
     HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
 

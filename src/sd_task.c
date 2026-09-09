@@ -1,7 +1,10 @@
+#include "stm32f411xe.h"
 #include "stm32f4xx_hal.h"
+#include "stm32f4xx_hal_dma.h"
 #include "sd_task.h"
 
-static SD_HandleTypeDef hsd;
+static SD_HandleTypeDef hsd;        // handler sd
+static DMA_HandleTypeDef hdma_tx;   // handler dma
 
 static void SD_GPIO_Init(void)
 {
@@ -63,4 +66,33 @@ HAL_StatusTypeDef SD_Init(void)
     }
 
     return HAL_SD_ConfigWideBusOperation(&hsd, SDIO_BUS_WIDE_4B);   // now here we can switch
+}
+
+static void SD_DMA_Init(void)
+{
+    __HAL_RCC_DMA2_CLK_ENABLE();
+
+    hdma_tx.Instance                 = DMA2_Stream3;            // ref. pg. 204 rm0390 Table 29, Stream6 also valid
+    hdma_tx.Init.Channel             = DMA_CHANNEL_4;           // ref. pg. 204 rm0390 Table 29
+    hdma_tx.Init.Direction           = DMA_MEMORY_TO_PERIPH;
+    hdma_tx.Init.PeriphInc           = DMA_PINC_DISABLE;        // SDIO fifo, dont increment
+    hdma_tx.Init.MemInc              = DMA_MINC_ENABLE;         // increment on memory buffer
+    hdma_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_WORD;     // DMA_SxCR MSIZE, word = 32 bit
+    hdma_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_WORD;     // DMA_SxCR PSIZE
+    hdma_tx.Init.Mode                = DMA_PFCTRL;              // the peripheral decides when DMA should happen
+    hdma_tx.Init.Priority            = DMA_PRIORITY_VERY_HIGH;  // TODO: change this maybe? could be a concern to someone
+    hdma_tx.Init.FIFOMode            = DMA_FIFOMODE_ENABLE;     // need fifo to burst
+    hdma_tx.Init.FIFOThreshold       = DMA_FIFO_THRESHOLD_FULL; // fill the DMA fifo complete before flush
+    hdma_tx.Init.MemBurst            = DMA_MBURST_INC4;         // writes 4 words in one transaction (memory to DMA fifo)
+    hdma_tx.Init.PeriphBurst         = DMA_PBURST_INC4;         // writes 4 words in one transaction (DMA fifo to SD fifo)
+
+    HAL_DMA_Init(&hdma_tx);
+    __HAL_LINKDMA(&hsd, hdmatx, hdma_tx);
+
+    // DMA transfer and SDIO transactions take unpredictable time, this is for non-blocking
+    HAL_NVIC_SetPriority(DMA2_Stream3_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(DMA2_Stream3_IRQn);
+
+    HAL_NVIC_SetPriority(SDIO_IRQn, 0, 0);
+    HAL_NVIC_EnableIRQ(SDIO_IRQn);
 }

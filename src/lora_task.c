@@ -66,6 +66,7 @@ static void enter(lora_ctx_t *ctx, lora_state_t state, uint32_t ms) {
   ctx->rx_ended = false;
 }
 
+//can be moved to gps task, place holder while the mailbox doesnt exist
 void lora_task_publish_fix(const gps_fix_t *fix) {
   if (!fix) return;
   taskENTER_CRITICAL();

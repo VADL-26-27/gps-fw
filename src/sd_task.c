@@ -5,6 +5,7 @@
 #include "sd_task.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include <stdio.h>
 #include <string.h>
 
 SD_HandleTypeDef hsd;        // handler sd
@@ -130,5 +131,38 @@ void SD_Task(void)
         f_close(&file);
     }
         
-    for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }   // TODO: write from memory buffer
+    for (;;)
+    {
+        GPS_Fix_t fix;
+        GPS_GetFix(&fix);
+
+        char line[100];
+        // snprintf writes to the provided char* buffer
+        int len = snprintf(line, sizeof(line), 
+                "%lu,%.6f,%.6f,%.2f\r\n",
+                (unsigned long)fix.timestamp,
+                fix.latitude,                   // -> .6f, good enough?
+                fix.longitude,                  // -> .6f, good enough?
+                fix.altitude
+                );
+
+        // FA_OPEN_APPEND as apposed to FA_CREATE_ALWAYS adds to EOF rather than clearing and overwriting
+        res = f_open(&file, "gps_log.csv", FA_WRITE | FA_OPEN_APPEND);  // nasty ORing of bitmaps (C :P)
+        if (res == FR_OK)
+        {
+            UINT bytes_written;
+            f_write(&file, line, (UINT)len, &bytes_written);
+            f_close(&file);
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+// TODO PLACEHOLDER!!! REMOVE
+void GPS_GetFix(GPS_Fix_t *fix)
+{
+    fix->latitude   = 0.0f;
+    fix->longitude  = 0.0f;
+    fix->altitude   = 0.0f;
+    fix->timestamp  = 0u;
 }

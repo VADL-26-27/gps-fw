@@ -13,6 +13,9 @@
 #define TELEMETRY_FRAME_LEN 32u
 #define TELEMETRY_HEX_BUF_LEN 65u
 
+/* Wire integers use big-endian order. CRC is CCITT-FALSE over bytes 2..29.
+ * These structs are application values, not packed wire representations. */
+
 typedef struct {
   uint32_t timestamp_epoch;
   uint32_t nmea_time_utc;

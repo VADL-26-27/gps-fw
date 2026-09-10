@@ -1,7 +1,11 @@
+#include "ff.h"
 #include "stm32f411xe.h"
 #include "stm32f4xx_hal.h"
 #include "stm32f4xx_hal_dma.h"
 #include "sd_task.h"
+#include "FreeRTOS.h"
+#include "task.h"
+#include <string.h>
 
 SD_HandleTypeDef hsd;        // handler sd
 static DMA_HandleTypeDef hdma_tx;   // handler dma
@@ -41,33 +45,7 @@ static void SD_GPIO_Init(void)
     HAL_GPIO_Init(GPIOD, &GPIO_InitStruct);
 }
 
-HAL_StatusTypeDef SD_Init(void)
-{
-    __HAL_RCC_SDIO_CLK_ENABLE();
-    __HAL_RCC_DMA2_CLK_ENABLE(); // SDIO is on DMA2, ref. pg. 204 rm0390 Table 29
-
-    SD_GPIO_Init();
-
-    hsd.Instance                 = SDIO;
-    hsd.Init.ClockEdge           = SDIO_CLOCK_EDGE_RISING;
-    hsd.Init.ClockBypass         = SDIO_CLOCK_BYPASS_DISABLE;
-    hsd.Init.ClockPowerSave      = SDIO_CLOCK_POWER_SAVE_DISABLE;
-    hsd.Init.BusWide             = SDIO_BUS_WIDE_1B;
-        // Must be 1 wide, Can be changed after initialization
-        // ref. pg. 963 rm0390 
-    hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
-    hsd.Init.ClockDiv            = SDIO_TRANSFER_CLK_DIV;               // sets SDIO_CK frequency
-
-    HAL_StatusTypeDef status = HAL_SD_Init(&hsd);   // runs card identification (CMD0/CMD8/ACMD41/CMD2/CMD3...)
-                                                    // This shit sucks, thank you blessed HAL
-    if (status != HAL_OK)
-    {
-        return status;
-    }
-
-    return HAL_SD_ConfigWideBusOperation(&hsd, SDIO_BUS_WIDE_4B);   // now here we can switch
-}
-
+// note that this method only links dma tx (memory to peripheral) (those who read)
 static void SD_DMA_Init(void)
 {
     __HAL_RCC_DMA2_CLK_ENABLE();
@@ -95,4 +73,62 @@ static void SD_DMA_Init(void)
 
     HAL_NVIC_SetPriority(SDIO_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(SDIO_IRQn);
+}
+
+HAL_StatusTypeDef SD_Init(void)
+{
+    __HAL_RCC_SDIO_CLK_ENABLE();
+    __HAL_RCC_DMA2_CLK_ENABLE(); // SDIO is on DMA2, ref. pg. 204 rm0390 Table 29
+
+    SD_GPIO_Init();
+    SD_DMA_Init();
+
+    hsd.Instance                 = SDIO;
+    hsd.Init.ClockEdge           = SDIO_CLOCK_EDGE_RISING;
+    hsd.Init.ClockBypass         = SDIO_CLOCK_BYPASS_DISABLE;
+    hsd.Init.ClockPowerSave      = SDIO_CLOCK_POWER_SAVE_DISABLE;
+    hsd.Init.BusWide             = SDIO_BUS_WIDE_1B;
+        // Must be 1 wide, Can be changed after initialization
+        // ref. pg. 963 rm0390 
+    hsd.Init.HardwareFlowControl = SDIO_HARDWARE_FLOW_CONTROL_DISABLE;
+    hsd.Init.ClockDiv            = SDIO_TRANSFER_CLK_DIV;               // sets SDIO_CK frequency
+
+    HAL_StatusTypeDef status = HAL_SD_Init(&hsd);   // runs card identification (CMD0/CMD8/ACMD41/CMD2/CMD3...)
+                                                    // This shit sucks, thank you blessed HAL
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+
+    return HAL_SD_ConfigWideBusOperation(&hsd, SDIO_BUS_WIDE_4B);   // now here we can switch
+}
+
+void SD_Task(void)
+{
+    FATFS   fs;     // filesystem object struct
+    FIL     file;   // file object struct (selfexplanatoryblahbalhablah)
+    FRESULT res;    // file function return code
+
+    res = f_mount(&fs, "", 1);  // in fs mount the default drive (path="") immediately (opt=1)
+                                // this ends up calling my disk_initialize() implementation in diskio.c
+    if (res != FR_OK)
+    {
+        for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }   // TODO: mount fail implementation
+    }
+
+    res = f_open(&file, "test.txt", FA_WRITE | FA_CREATE_ALWAYS);
+    // it doesnt say in ff.h but 
+    //  FA_CREATE_ALWAYS creates a new file or truncates and overwrites existing.
+    //  FA_WRITE gives write access
+    // ref: elm-chan.org/fsw/ff/doc/open.html
+
+    if (res == FR_OK)
+    {
+        UINT bytes_written;
+        const char *msg = "hello world\r\n";    // \r -> carriage return, holy fricking unc
+        f_write(&file, msg, strlen(msg), &bytes_written);
+        f_close(&file);
+    }
+        
+    for (;;) { vTaskDelay(pdMS_TO_TICKS(1000)); }   // TODO: write from memory buffer
 }

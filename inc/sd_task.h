@@ -9,5 +9,6 @@
 extern SD_HandleTypeDef hsd;
 
 HAL_StatusTypeDef SD_Init(void);
+void SD_Task(void);
 
 #endif /* SD_TASK_H */

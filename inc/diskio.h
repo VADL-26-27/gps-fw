@@ -12,6 +12,8 @@ extern "C" {
 /* Status of Disk Functions */
 typedef BYTE	DSTATUS;
 
+// NOTE: this gets pissy here about BYTE type unavailable but its only used in ff.c which declares it before including this
+
 /* Results of Disk Functions */
 typedef enum {
 	RES_OK = 0,		/* 0: Successful */

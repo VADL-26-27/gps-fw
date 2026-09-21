@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "FreeRTOS.h"
 #include "task.h"
-#include "stm32f4xx.h"
+#include "stm32f411xe.h"
 
 #define UART_DMA_RX_RING_SIZE 1024u
 #define UART_DMA_RX_READ_MAX 64u

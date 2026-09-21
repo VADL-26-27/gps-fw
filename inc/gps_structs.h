@@ -6,7 +6,7 @@
 typedef struct {
   uint32_t timestamp_epoch;
   uint32_t nmea_time_utc;
-  int32_t lattitude;
+  int32_t latitude;
   int32_t longitude;
   int16_t altitude_msl;
   uint16_t course;

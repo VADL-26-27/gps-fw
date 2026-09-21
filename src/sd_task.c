@@ -7,6 +7,7 @@
 #include "task.h"
 #include <stdio.h>
 #include <string.h>
+#include "gps_structs.h"
 
 SD_HandleTypeDef hsd;        // handler sd
 static DMA_HandleTypeDef hdma_tx;   // handler dma
@@ -133,17 +134,17 @@ void SD_Task(void)
         
     for (;;)
     {
-        GPS_Fix_t fix;
+        gps_fix_t fix;
         GPS_GetFix(&fix);
 
         char line[100];
         // snprintf writes to the provided char* buffer
         int len = snprintf(line, sizeof(line), 
-                "%lu,%.6f,%.6f,%.2f\r\n",
-                (unsigned long)fix.timestamp,
+                "%lu,%d,%d,%d\r\n",
+                (unsigned long)fix.timestamp_epoch,
                 fix.latitude,                   // -> .6f, good enough?
                 fix.longitude,                  // -> .6f, good enough?
-                fix.altitude
+                fix.altitude_msl
                 );
 
         // FA_OPEN_APPEND as apposed to FA_CREATE_ALWAYS adds to EOF rather than clearing and overwriting
@@ -159,10 +160,10 @@ void SD_Task(void)
 }
 
 // TODO PLACEHOLDER!!! REMOVE
-void GPS_GetFix(GPS_Fix_t *fix)
+void GPS_GetFix(gps_fix_t *fix)
 {
     fix->latitude   = 0.0f;
     fix->longitude  = 0.0f;
-    fix->altitude   = 0.0f;
-    fix->timestamp  = 0u;
+    fix->altitude_msl   = 0.0f;
+    fix->timestamp_epoch  = 0u;
 }

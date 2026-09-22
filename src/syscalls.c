@@ -4,6 +4,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+/* Called by __libc_init_array() from the vendor startup file. */
+void _init(void) {}
+
 void _exit(int status) {
   (void)status;
 

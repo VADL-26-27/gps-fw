@@ -35,4 +35,7 @@ int rak3172_build_psend_hex(char *buf, size_t cap, const uint8_t *bin,
                           size_t bin_len);
 /* Classify exactly one complete line, without CRLF. No substring matching. */
 rak3172_result_t rak3172_parse_result(const char *line, size_t len);
+/* Decode a complete RX event (without CRLF) into caller-owned bytes.
+ * Returns payload length, or zero for invalid input/insufficient capacity. */
+size_t rak3172_decode_rx(const char *line, size_t len, uint8_t *out, size_t cap);
 #endif

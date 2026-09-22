@@ -13,6 +13,11 @@ FREERTOS_PORT := $(FREERTOS_DIR)/portable/GCC/ARM_CM4F
 # Application and FreeRTOS source files
 override C_SOURCES := \
 src/main.c \
+src/lora_task.c \
+src/rak3172_protocol.c \
+src/uart_dma_driver.c \
+src/telemetry_frame.c \
+src/ground_rx_fifo.c \
 src/system_stm32f4xx.c \
 src/syscalls.c \
 $(FREERTOS_DIR)/tasks.c \

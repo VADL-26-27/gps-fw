@@ -4,6 +4,7 @@
 #include "task.h"
 #include "lora_task.h"
 #include "rak3172_protocol.h"
+#include "ground_rx_fifo.h"
 
 #define LORA_ACTIVE_TX_LEN 544u
 #define LORA_LINE_LEN 600u
@@ -143,9 +144,14 @@ static void handle_line(lora_ctx_t *ctx) {
     return;
   }
   if (r == RAK3172_RESULT_RX_PACKET) {
-    /* TBD: ground-station message format/authorization. Count the complete
-     * event but do not execute received commands or alter flight behavior. */
+    /* Copy decoded bytes out before the UART line buffer is reused.
+     * Logging arbitrary payloads does not execute ground commands. */
+    ground_rx_record_t record = {0};
+    record.length = (uint16_t)rak3172_decode_rx(ctx->line, ctx->line_len,
+                                             record.payload, sizeof(record.payload));
     stats.received_packets++;
+    if (record.length && ground_rx_fifo_try_push(&record)) stats.rx_queued++;
+    else stats.rx_dropped++;
     if (ctx->state == LORA_RX_ARM && ctx->pending) ctx->rx_ended = true;
     if (ctx->state == LORA_RX_LISTEN) enter(ctx, LORA_PROCESS_RX, 0u);
     return;

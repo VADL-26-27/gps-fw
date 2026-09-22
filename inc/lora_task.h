@@ -39,6 +39,8 @@ typedef struct {
   uint32_t timeouts;
   uint32_t malformed_lines;
   uint32_t received_packets;
+  uint32_t rx_queued;
+  uint32_t rx_dropped; /* Includes packets rejected by the placeholder FIFO. */
   uint32_t transmitted_frames;
   uint32_t hardware_resets;
 } lora_stats_t;

@@ -1,6 +1,8 @@
 #include "stm32f4xx.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timers.h"
+#include <stdint.h>
 
 static volatile uint32_t heartbeat;
 

@@ -31,7 +31,7 @@ int main(void) {
     }
   }
 
-  /* Future GPS integration: add its sources to C_SOURCES in Makefile, include
+  /* Future GPS integration: add its sources to build.sh, include
    * gps_task.h above, and create GPS_Task here before starting the scheduler.
    * Choose its stack depth from parser requirements and measured stack use:
    *

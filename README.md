@@ -4,9 +4,61 @@ Firmware for the nose-cone GNSS receiver, RAK3172 LoRa P2P link, and microSD fli
 
 **Target:** STM32F411RET6 • FreeRTOS • MAX-M10S GNSS • RAK3172 • microSD over SDIO
 
-## System at a glance
+## Implementation status
 
-The firmware has three FreeRTOS tasks. DMA moves UART and SDIO data; interrupts remain short and notify the owning task. Tasks perform parsing, framing, logging, retry, and recovery work.
+The architecture below is the target design; it is not yet fully implemented.
+The local branch review on 2026-10-04 found:
+
+| Area | `main` | `Oliver` / current checkout |
+| --- | --- | --- |
+| Tasks | FreeRTOS heartbeat only | LoRa task and heartbeat; GPS and SD tasks remain unimplemented |
+| Radio | No LoRa implementation | USART1 DMA driver, AT parser/builders, P2P state machine, receive rearming, bounded recovery/reset/backoff |
+| Telemetry | Planned protocol | Explicit 32-byte serialization, CRC and hex encoding; latest-fix publication API |
+| Scheduling | Planned 1 Hz telemetry | Sends when a fix is pending; 1 Hz rate limit and fix-age/validity checks remain unimplemented |
+| Ground packets | Planned FIFO/commands | Decodes packets, but FIFO callback is a placeholder that rejects every record; no storage or command execution |
+| RF settings | TBD | `main()` passes NULL configuration, so LoRa stays offline until approved settings and TX timeout are supplied |
+
+`inc/gps_structs.h` and `inc/telemetry_frame.h` currently define incompatible
+versions of `gps_fix_t` and `telemetry_frame_t`. Reconcile these before GPS
+integration; the wire format is produced explicitly by `telemetry_frame_serialize()`.
+
+The merge retains LoRa task startup and FreeRTOS task notifications while
+adopting `main`'s CMSIS/startup/linker layout and shell build. The old Windows
+Makefile is removed; `build.sh` compiles all LoRa sources and links newlib and
+compiler support libraries required by the AT formatter and vendor startup.
+These findings concern local branch refs; remote branch freshness was not checked.
+
+## Build and verification
+
+Install the GNU Arm Embedded toolchain (`arm-none-eabi-gcc`, binutils, and
+newlib), and initialize the FreeRTOS submodule:
+
+```sh
+git submodule update --init rtos
+bash build.sh
+```
+
+Outputs are `build/firmware.elf`, `.bin`, `.hex`, and `.map`. To build and flash
+using an attached ST-Link and installed `st-flash`, run `bash build.sh --flash`.
+
+Run the host tests with a C compiler supporting address and undefined-behavior
+sanitizers:
+
+```sh
+sh tests/run.sh
+```
+
+The merged firmware builds successfully with GNU Arm GCC 14.2.1, producing
+23,048 bytes of code/constant data, 88 bytes of initialized RAM data, and
+19,920 bytes of zero-initialized RAM data.
+
+Protocol/telemetry, task state-machine, and UART/DMA register tests pass. The
+tests use simulated task/hardware interfaces; board operation and over-the-air
+behavior still need verification.
+
+## Target system at a glance
+
+The intended firmware has three FreeRTOS tasks. DMA moves UART and SDIO data; interrupts remain short and notify the owning task. Tasks perform parsing, framing, logging, retry, and recovery work.
 
 ```mermaid
 flowchart LR
@@ -35,7 +87,7 @@ flowchart LR
 | GNSS/LoRa RX rings | UART DMA → task                    | Circular byte buffers. ISR snapshots producer position and notifies the task.             |
 | `ground_cmd_fifo`  | LoRa parser → LoRa command handler | Small FIFO of complete candidate commands; never use a latest-value mailbox for commands. |
 
-The radio link sends the newest valid position at **1 Hz**. The task is event-driven rather than periodic: it wakes on its 1 Hz deadline, new-fix notification, UART/DMA event, receive-window deadline, or retry timeout.
+The target radio link sends the newest fresh valid position at **1 Hz**. The intended task is event-driven: it wakes on its 1 Hz deadline, new-fix notification, UART/DMA event, receive-window deadline, or retry timeout. The current implementation wakes on fixes and radio events/timeouts but does not enforce the 1 Hz deadline or freshness policy.
 
 ## Key interfaces
 
@@ -50,7 +102,7 @@ The radio link sends the newest valid position at **1 Hz**. The task is event-dr
 ## Documentation
 
 - [Architecture](docs/architecture.md) — data paths, task behavior, buffers, and scheduling.
-- [Hardware interfaces](docs/hardware.md) — verified pinout and peripheral mapping.
+- [Hardware interfaces](docs/hardware.md) — pinout and peripheral mapping.
 - [Telemetry protocol](docs/protocol.md) — 32-byte frame, serialization, CRC, and commands.
 - [Drivers](docs/drivers.md) — UART/DMA and SDIO/FatFs responsibilities.
 - [LoRa P2P state machine](docs/lora-state-machine.md) — RAK3172 operation, timing, and receive behavior.

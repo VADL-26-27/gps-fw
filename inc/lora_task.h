@@ -2,8 +2,7 @@
 #define LORA_TASK_H
 
 #include <stdint.h>
-#include "telemetry_frame.h"
-#include "uart_dma_driver.h"
+#include "gps_structs.h"
 
 typedef enum {
   LORA_OFFLINE = 0,

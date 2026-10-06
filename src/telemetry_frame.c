@@ -29,7 +29,7 @@ size_t telemetry_frame_serialize(const gps_fix_t *fix, uint8_t seq_num,
   out[4] = seq_num;
   put32(out + 5, fix->timestamp_epoch);
   put32(out + 9, fix->nmea_time_utc);
-  put32(out + 13, (uint32_t)fix->latitude);
+  put32(out + 13, (uint32_t)fix->lattitude);
   put32(out + 17, (uint32_t)fix->longitude);
   put16(out + 21, (uint16_t)fix->altitude_msl);
   out[23] = fix->fix_quality;

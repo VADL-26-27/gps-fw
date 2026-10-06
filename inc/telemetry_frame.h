@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "gps_structs.h"
 
 #define TELEMETRY_SYNC_0 0xAAu
 #define TELEMETRY_SYNC_1 0x55u
@@ -13,30 +14,6 @@
 #define TELEMETRY_FRAME_LEN 32u
 #define TELEMETRY_HEX_BUF_LEN 65u
 
-/* Wire integers use big-endian order. CRC is CCITT-FALSE over bytes 2..29.
- * These structs are application values, not packed wire representations. */
-
-typedef struct {
-  uint32_t timestamp_epoch;
-  uint32_t nmea_time_utc;
-  int32_t latitude;
-  int32_t longitude;
-  int16_t altitude_msl;
-  uint8_t fix_quality;
-  uint8_t num_sats;
-  uint8_t hdop;
-  uint16_t course;
-  uint16_t speed;
-} gps_fix_t;
-
-typedef struct {
-  uint8_t sync[2];
-  uint8_t version;
-  uint8_t msg_type;
-  uint8_t seq_num;
-  gps_fix_t payload;
-  uint16_t checksum;
-} telemetry_frame_t;
 
 uint16_t telemetry_frame_crc16(const uint8_t *data, size_t len);
 size_t telemetry_frame_serialize(const gps_fix_t *fix, uint8_t seq_num,

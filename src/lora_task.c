@@ -3,6 +3,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "lora_task.h"
+#include "telemetry_frame.h"
+#include "uart_dma_driver.h"
 #include "rak3172_protocol.h"
 #include "ground_rx_fifo.h"
 

@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+/* Shared application types. Their in-memory sizes include padding and are
+ * not wire lengths. Use telemetry_frame_serialize() for LoRa packets: it
+ * writes a versioned 32-byte frame with a 25-byte GPS payload, in big-endian
+ * order, excluding reserved bytes. Never transmit these structs directly. */
+
 typedef struct {
   uint32_t timestamp_epoch;
   uint32_t nmea_time_utc;

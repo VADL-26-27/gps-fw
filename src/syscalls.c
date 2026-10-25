@@ -4,6 +4,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+void _init(void) {}
+
 void _exit(int status) {
   (void)status;
 

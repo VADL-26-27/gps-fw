@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "rak3172_protocol.h"
+#include "gps_structs.h"
 #include "telemetry_frame.h"
 #include "ground_rx_fifo.h"
 
@@ -59,8 +60,10 @@ int main(void) {
 
   assert(telemetry_frame_crc16((const uint8_t *)"123456789", 9) == 0x29b1u);
   gps_fix_t fix = {.timestamp_epoch = 0x01020304u, .nmea_time_utc = 0x05060708u,
-      .latitude = -2, .longitude = 0x11223344, .altitude_msl = -10,
+      .lattitude = -2, .longitude = 0x11223344, .altitude_msl = -10,
       .fix_quality = 1, .num_sats = 12, .hdop = 15, .course = 1234, .speed = 5678};
+  /* Reserved application bytes must never leak into the wire frame. */
+  memset(fix.reserved, 0xa5, sizeof(fix.reserved));
   uint8_t frame[32];
   const uint8_t expected[] = {0xaa,0x55,1,1,255,1,2,3,4,5,6,7,8,
       255,255,255,254,0x11,0x22,0x33,0x44,255,246,1,12,15,4,210,22,46};

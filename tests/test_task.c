@@ -99,7 +99,7 @@ static void listening(lora_ctx_t *ctx) {
 
 int main(void) {
   lora_ctx_t c;
-  gps_fix_t fix = {.latitude = 123};
+  gps_fix_t fix = {.lattitude = 123};
   setup(&c);
   c.configured = false; tick(&c);
   assert(c.state == LORA_OFFLINE && !sends && !restarts);
@@ -147,7 +147,7 @@ int main(void) {
   assert(strncmp(sent, "AT+PSEND=AA55010100", 18) == 0);
   response(&c, "OK\r\n");
   assert(c.state == LORA_WAIT_TX_RESULT && stats.transmitted_frames == 0);
-  fix.latitude = 456; lora_task_publish_fix(&fix);
+  fix.lattitude = 456; lora_task_publish_fix(&fix);
   response(&c, "+EVT:UNRELATED\r\n"); assert(c.state == LORA_WAIT_TX_RESULT);
   response(&c, "+EVT:TXP2P DONE\r\n");
   assert(c.state == LORA_RX_ARM && stats.transmitted_frames == 1 && fix_pending());

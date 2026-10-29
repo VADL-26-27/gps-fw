@@ -4,6 +4,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+<<<<<<< HEAD
 /* Called by __libc_init_array() from the vendor startup file. */
 void _init(void) {}
 
@@ -79,4 +80,13 @@ void *_sbrk(ptrdiff_t increment) {
 
   errno = ENOMEM;
   return (void *)-1;
+=======
+void _init(void) {}
+
+void _exit(int status) {
+  (void)status;
+
+  for (;;) {
+  }
+>>>>>>> origin/colin_gps
 }

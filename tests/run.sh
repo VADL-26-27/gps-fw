@@ -15,6 +15,6 @@ for name in task driver; do
   if [ "$name" = task ]; then extra='src/gps_mailbox.c tests/fakes/queue.c'; fi
   $cc $flags -Wno-int-to-pointer-cast -DSTM32F413xx -Itests/fakes -Iinc -Icmsis \
     -include tests/fakes/hardware.h tests/test_$name.c \
-    src/rak3172_protocol.c src/telemetry_frame.c $extra -lm -o build/tests/$name
+    src/rak3172_protocol.c src/telemetry_frame.c src/ring_buf.c $extra -lm -o build/tests/$name
   build/tests/$name
 done

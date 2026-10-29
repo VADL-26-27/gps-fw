@@ -170,8 +170,10 @@ static bool drain_rx(lora_ctx_t *ctx, usart_t *uart) {
   uint8_t bytes[USART_RX_READ_MAX];
   size_t budget = LORA_RX_BUDGET;
   while (budget) {
-    uint16_t n = usart_rx_read(uart, bytes, sizeof(bytes));
-    if (!n) break;
+    uint16_t n = usart_rx_available(uart);
+    if (n > sizeof(bytes)) n = sizeof(bytes);
+    if (n > budget) n = (uint16_t)budget;
+    if (!n || !usart_read(uart, bytes, n)) break;
     budget -= n;
     for (uint16_t i = 0; i < n; ++i) {
       uint8_t ch = bytes[i];
@@ -198,7 +200,7 @@ static bool drain_rx(lora_ctx_t *ctx, usart_t *uart) {
 
 static void submit(lora_ctx_t *ctx, usart_t *uart, int len, uint32_t timeout_ms) {
   if (len <= 0 || (size_t)len >= sizeof(active_tx) ||
-      !usart_start_tx(uart, (const uint8_t *)active_tx, (uint16_t)len)) {
+      !usart_write(uart, (const uint8_t *)active_tx, (uint16_t)len)) {
     fail(ctx, false);
     return;
   }
@@ -435,7 +437,6 @@ void LoRa_Task(void *argument) {
   task_handle = xTaskGetCurrentTaskHandle();
   taskEXIT_CRITICAL();
   gps_mailbox_set_notify_task(task_handle, LORA_NOTIFY_NEW_FIX);
-  usart_set_notify_task(uart, task_handle);
   board_lora_control_init();
   bool initialized = usart_init(uart);
   if (!initialized) ctx.configured = false;

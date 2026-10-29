@@ -1,10 +1,17 @@
 #include "usart_board.h"
 
-/* TODO: select USART, DMA controller/streams/channels and IRQs, provide the
- * peripheral clock and baud rate, and implement clock/GPIO/reset callbacks.
- * A zero configuration makes usart_init() return false without touching HW.
- * Do not assign board pins or assume a USART/DMA mapping here yet. */
-usart_t lora_usart = {0};
+/* Same per-port RX/TX buffers as flight-logic; hardware mapping is TBD. */
+static ring_buf lora_rx;
+static ring_buf lora_tx;
+
+/* TODO: select USART/DMA streams, channels and IRQs; supply clock_hz,
+ * baud_rate, clock/GPIO callbacks and an optional peripheral-reset callback.
+ * usart_init() computes BRR and sets DMA channels from these fields.
+ * Missing hardware configuration fails without touching registers. */
+usart_t lora_usart = {
+    .rx = &lora_rx,
+    .tx = &lora_tx,
+};
 
 usart_t *board_lora_usart_get(void) { return &lora_usart; }
 

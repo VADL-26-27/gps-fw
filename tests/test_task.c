@@ -34,28 +34,23 @@ BaseType_t xTaskNotifyWait(uint32_t a, uint32_t b, uint32_t *v, TickType_t ticks
 usart_t *board_lora_usart_get(void) { return &uart; }
 void usart_poll(usart_t *u) { (void)u; }
 bool usart_init(usart_t *u) { (void)u; return true; }
-void usart_set_notify_task(usart_t *u, TaskHandle_t t) { u->notify_task = t; }
-bool usart_start_rx(usart_t *u) { (void)u; return true; }
 uint16_t usart_rx_available(usart_t *u) { (void)u; return (uint16_t)(rx_in - rx_out); }
-uint16_t usart_rx_read(usart_t *u, uint8_t *dst, uint16_t max) {
-  uint16_t n = usart_rx_available(u);
-  if (n > max) n = max;
-  if (n > USART_RX_READ_MAX) n = USART_RX_READ_MAX;
-  memcpy(dst, rx + rx_out, n); rx_out += n; return n;
+bool usart_read(usart_t *u, uint8_t *dst, uint32_t n) {
+  if (n > usart_rx_available(u)) return false;
+  memcpy(dst, rx + rx_out, n); rx_out += n; return true;
 }
 void usart_rx_reset(usart_t *u) { (void)u; rx_in = rx_out = 0; }
-bool usart_start_tx(usart_t *u, const uint8_t *buf, uint16_t n) {
+bool usart_write(usart_t *u, const uint8_t *buf, uint32_t n) {
   assert(!u->tx_busy);
   assert(n < sizeof(sent));
   if (refuse_tx) return false;
   memcpy(sent, buf, n); sent[n] = 0; sends++; u->tx_busy = true; return true;
 }
 bool usart_tx_busy(usart_t *u) { return u->tx_busy; }
-bool usart_faulted(const usart_t *u) { return u->fault; }
-uint32_t usart_error_count(const usart_t *u) { return u->error_count; }
+bool usart_faulted(const usart_t *u) { return u->rx_result == USART_RESULT_FAILED; }
 bool usart_stop(usart_t *u) { stops++; u->tx_busy = false; rx_in = rx_out = 0; return true; }
 bool usart_recover(usart_t *u) {
-  restarts++; u->tx_busy = u->fault = false; rx_in = rx_out = 0; return !refuse_recover;
+  restarts++; u->tx_busy = false; u->rx_result = USART_RESULT_NONE; rx_in = rx_out = 0; return !refuse_recover;
 }
 void board_lora_control_init(void) { }
 void board_lora_reset(bool asserted) { reset_asserted = asserted; }
@@ -221,11 +216,11 @@ int main(void) {
   for (unsigned i = 0; i < 4; ++i) tick(&c);
   assert(stats.malformed_lines == 1 && stats.failures == 1 && stops);
   setup(&c); listening(&c);
-  uart.fault = true;
-  service(&c, &uart, USART_NOTIFY_ERROR);
+  uart.rx_result = USART_RESULT_FAILED;
+  service(&c, &uart, 0u);
   assert(c.state == LORA_WAIT_MODULE_REBOOT && stats.failures == 1);
-  service(&c, &uart, USART_NOTIFY_ERROR);
-  assert(stats.failures == 1); /* Stale error notification after restart. */
+  service(&c, &uart, 0u);
+  assert(stats.failures == 1); /* Recovery clears the failed result before the next service. */
 
   /* UART completion and AT reply both have finite, independent deadlines. */
   setup(&c); sync_ready(&c); now += LORA_UART_TX_MS; tick(&c);

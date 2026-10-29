@@ -10,39 +10,49 @@ hardware, and the LoRa task stays offline.
 
 ## USART + DMA driver
 
-`inc/usart.h` and `src/usart.c` follow the `spi_t *port` pattern used in
-`flight-logic-fw`. Each `usart_t` supplies:
+The USART driver extends `flight-logic-fw/inc/usart.h` and
+`flight-logic-fw/src/usart.c`. It keeps the `usart_t *port` interface, per-port
+`ring_buf *rx` / `*tx`, `clock_hz`, `baud_rate`, and clock/GPIO callbacks.
+`usart_init()` computes BRR using the same peripheral-clock/baud formula.
+It returns a boolean so an unset board mapping can leave LoRa offline.
+The optional reset callback only resets the peripheral; it does not supply BRR.
 
-- USART registers, DMA controller, RX and TX DMA stream pointers.
-- USART error IRQ number and RX/TX DMA IRQ numbers.
-- RX/TX stream indices (0..7) and DMA channels (0..7).
-- Peripheral clock, baud rate, and a FreeRTOS-safe IRQ priority.
-- Clock/GPIO initialization and an optional USART reset callback.
-- Its own RX ring, transfer state, counters, and task notification target.
+`inc/ring_buf.h` and `src/ring_buf.c` come from flight-logic's ring-buffer
+implementation. Buffer capacity is increased from 128 to 1,024 bytes, and
+indices/counts and the read length use 32-bit types to support DMA-sized data.
+Each USART instance has separate RX/TX buffers supplied in `usart_board.c`.
 
-Board code must select a valid hardware mapping: stream pointers, indices,
-channels, and vectors must agree. RX and TX use distinct streams on the supplied
-DMA controller. Clock callbacks enable both the USART and DMA clocks; reset
-callbacks must never reset a DMA controller shared with another peripheral.
-All three IRQs use the supplied, identical priority.
+`usart_write(port, data, len)` copies a whole write into the TX ring when space
+is available, matching the original buffered interface. Caller storage can be
+reused after the call. DMA transmits contiguous queued segments, including two
+segments when the ring wraps. In-flight bytes remain counted until DMA completes
+and polling observes USART TC, so later writes cannot overwrite them.
+`usart_read(port, data, len)` returns exactly the requested bytes or false without
+consuming data. `usart_rx_available()` samples NDTR for short bursts, and
+`usart_rx_reset()` discards buffered input.
 
-RX uses circular DMA, with half/full and error interrupts. TX uses normal DMA,
-with completion and error interrupts. `usart_handle_irq()` handles USART errors
-only; RXNEIE, TXEIE, TCIE, and IDLEIE remain disabled. Board vector wrappers in
-`src/usart_irq.c` must forward to `usart_handle_irq()`,
-`usart_handle_rx_dma_irq()`, and `usart_handle_tx_dma_irq()` once chosen.
+The extension adds DMA controller/stream pointers, channel selections, DMA IRQ
+numbers, TX/RX result and completion state, timing fields, and DMA ring positions.
+Stream indices and flag banks are derived from the pointers using the STM32F4
+register layout. Streams must be distinct and belong to the supplied controller.
+Board code supplies channels, clocks, pins, IRQs and baud rate. It must not reset
+a DMA controller shared with other peripherals. Board mapping and IRQ wrappers
+remain placeholders until the final board is selected.
 
-Short RX bursts are discovered by sampling NDTR in task context. The LoRa task
-caps active waits at 10 ms so AT replies below a DMA half-buffer still get
-processed. A DMA TX-completion notification wakes the task, but buffer ownership
-is released only when polling observes USART TC (the last stop bit transmitted).
-Keep TX data unchanged until `usart_tx_busy()` returns false. A failed transfer
-retains ownership until a successful stop/recovery confirms the DMA is stopped.
+RX DMA starts in circular mode during initialization/recovery and writes directly
+to the port's RX ring. The driver samples progress from task context and DMA
+half/full IRQs, detects overwritten buffers and ambiguous coalesced half/full
+flags, and rejects reads overtaken by DMA. Continuous RX has no idle timeout.
+TX DMA uses normal mode; each segment has a 300 ms timeout. Transfer failures
+set the result fields to FAILED and retain busy state until a successful stop.
+Recovery reinitializes both rings, discards pending bytes and restarts RX.
 
-Each instance has one owning task. DMA keeps running during reads; ring overflow
-or an IRQ blackout spanning both half boundaries is reported as a fault. Choose
-a polling interval appropriate for the configured baud rate and ring size.
-ISRs never parse protocols, perform logging, or wait for a peripheral.
+`usart_handle_irq()` handles USART errors only. RXNEIE, TXEIE, TCIE and IDLEIE
+remain disabled; DMA handles byte movement. All three IRQs use the same
+FreeRTOS-safe priority. The LoRa task uses the generic read/write API directly
+and polls data/completion at most 10 ms apart while active. Choose that interval
+for the final baud rate and buffer size. Each port has one owning task.
+ISRs never parse protocols, log or wait for a peripheral.
 
 ## SDIO + FatFs driver
 

@@ -4,7 +4,7 @@
 #include "../src/lora_task.c"
 
 static TickType_t now;
-static uart_dma_t uart;
+static usart_t uart;
 static char rx[4096], sent[544];
 static size_t rx_in, rx_out;
 static unsigned sends, stops, restarts;
@@ -31,33 +31,34 @@ BaseType_t xTaskNotifyFromISR(TaskHandle_t t, uint32_t b, eNotifyAction a, BaseT
 BaseType_t xTaskNotifyWait(uint32_t a, uint32_t b, uint32_t *v, TickType_t ticks) {
   (void)a; (void)b; *v = 0; now += ticks; return pdFALSE;
 }
-uart_dma_t *uart_dma_lora_get(void) { return &uart; }
-bool uart_dma_lora_init(uart_dma_t *u) { (void)u; return true; }
-void uart_dma_set_notify_task(uart_dma_t *u, TaskHandle_t t) { u->notify_task = t; }
-bool uart_dma_start_rx(uart_dma_t *u) { (void)u; return true; }
-uint16_t uart_dma_rx_available(uart_dma_t *u) { (void)u; return (uint16_t)(rx_in - rx_out); }
-uint16_t uart_dma_rx_read(uart_dma_t *u, uint8_t *dst, uint16_t max) {
-  uint16_t n = uart_dma_rx_available(u);
+usart_t *board_lora_usart_get(void) { return &uart; }
+void usart_poll(usart_t *u) { (void)u; }
+bool usart_init(usart_t *u) { (void)u; return true; }
+void usart_set_notify_task(usart_t *u, TaskHandle_t t) { u->notify_task = t; }
+bool usart_start_rx(usart_t *u) { (void)u; return true; }
+uint16_t usart_rx_available(usart_t *u) { (void)u; return (uint16_t)(rx_in - rx_out); }
+uint16_t usart_rx_read(usart_t *u, uint8_t *dst, uint16_t max) {
+  uint16_t n = usart_rx_available(u);
   if (n > max) n = max;
-  if (n > UART_DMA_RX_READ_MAX) n = UART_DMA_RX_READ_MAX;
+  if (n > USART_RX_READ_MAX) n = USART_RX_READ_MAX;
   memcpy(dst, rx + rx_out, n); rx_out += n; return n;
 }
-void uart_dma_rx_reset(uart_dma_t *u) { (void)u; rx_in = rx_out = 0; }
-bool uart_dma_start_tx(uart_dma_t *u, const uint8_t *buf, uint16_t n) {
+void usart_rx_reset(usart_t *u) { (void)u; rx_in = rx_out = 0; }
+bool usart_start_tx(usart_t *u, const uint8_t *buf, uint16_t n) {
   assert(!u->tx_busy);
   assert(n < sizeof(sent));
   if (refuse_tx) return false;
   memcpy(sent, buf, n); sent[n] = 0; sends++; u->tx_busy = true; return true;
 }
-bool uart_dma_tx_busy(const uart_dma_t *u) { return u->tx_busy; }
-bool uart_dma_faulted(const uart_dma_t *u) { return u->fault; }
-uint32_t uart_dma_error_count(const uart_dma_t *u) { return u->error_count; }
-bool uart_dma_stop(uart_dma_t *u) { stops++; u->tx_busy = false; rx_in = rx_out = 0; return true; }
-bool uart_dma_recover(uart_dma_t *u) {
+bool usart_tx_busy(usart_t *u) { return u->tx_busy; }
+bool usart_faulted(const usart_t *u) { return u->fault; }
+uint32_t usart_error_count(const usart_t *u) { return u->error_count; }
+bool usart_stop(usart_t *u) { stops++; u->tx_busy = false; rx_in = rx_out = 0; return true; }
+bool usart_recover(usart_t *u) {
   restarts++; u->tx_busy = u->fault = false; rx_in = rx_out = 0; return !refuse_recover;
 }
-void uart_dma_radio_control_init(void) { }
-void uart_dma_radio_reset(bool asserted) { reset_asserted = asserted; }
+void board_lora_control_init(void) { }
+void board_lora_reset(bool asserted) { reset_asserted = asserted; }
 
 static void feed(const char *s) {
   size_t n = strlen(s);
@@ -74,7 +75,10 @@ static void setup(lora_ctx_t *ctx) {
   memset(ctx, 0, sizeof(*ctx)); memset(&uart, 0, sizeof(uart));
   memset(&stats, 0, sizeof(stats)); memset(active_tx, 0, sizeof(active_tx));
   now = 0; rx_in = rx_out = sends = stops = restarts = 0;
-  fix_dirty = false; fix_generation = 0; task_handle = NULL;
+  fix_dirty = false; task_handle = NULL;
+  gps_mailbox_init();
+  gps_mailbox_t discarded;
+  while (gps_mailbox_receive(&discarded)) {}
   reset_asserted = refuse_tx = refuse_recover = false;
   captured_count = 0; sink_full = false;
   ctx->config = (lora_config_t){868000000, 7, 0, 0, 8, 14, 5000};
@@ -99,7 +103,7 @@ static void listening(lora_ctx_t *ctx) {
 
 int main(void) {
   lora_ctx_t c;
-  gps_fix_t fix = {.lattitude = 123};
+  gps_fix_t fix = {.latitude_deg = 123};
   setup(&c);
   c.configured = false; tick(&c);
   assert(c.state == LORA_OFFLINE && !sends && !restarts);
@@ -139,6 +143,16 @@ int main(void) {
   response(&c, "OK\r\n"); response(&c, "AT+NWM=0\r\nOK\r\n");
   assert(strcmp(sent, "AT+PRECV=0\r\n") == 0);
 
+  /* Mailbox overwrites stale values and retains acquisition time. */
+  setup(&c);
+  gps_mailbox_t first = {.fix = {.latitude_deg = 1}, .acquired_tick = 10};
+  gps_mailbox_t second = {.fix = {.latitude_deg = 2}, .acquired_tick = 20}, received;
+  assert(gps_mailbox_publish(&first));
+  assert(gps_mailbox_publish(&second));
+  assert(gps_mailbox_receive(&received));
+  assert(received.fix.latitude_deg == 2 && received.acquired_tick == 20);
+  assert(!gps_mailbox_receive(&received));
+
   /* Pre-start fixes persist. Newest fix wins while previous TX is active. */
   setup(&c); lora_task_publish_fix(&fix); listening(&c); tick(&c);
   assert(c.state == LORA_RX_STOP && fix_pending());
@@ -147,7 +161,7 @@ int main(void) {
   assert(strncmp(sent, "AT+PSEND=AA55010100", 18) == 0);
   response(&c, "OK\r\n");
   assert(c.state == LORA_WAIT_TX_RESULT && stats.transmitted_frames == 0);
-  fix.lattitude = 456; lora_task_publish_fix(&fix);
+  fix.latitude_deg = 456; lora_task_publish_fix(&fix);
   response(&c, "+EVT:UNRELATED\r\n"); assert(c.state == LORA_WAIT_TX_RESULT);
   response(&c, "+EVT:TXP2P DONE\r\n");
   assert(c.state == LORA_RX_ARM && stats.transmitted_frames == 1 && fix_pending());
@@ -197,7 +211,7 @@ int main(void) {
   setup(&c); listening(&c);
   for (unsigned i = 0; i < 40; ++i) feed("+EVT:UNRELATED\r\n");
   unsigned passes = 0;
-  while (uart_dma_rx_available(&uart)) { tick(&c); assert(++passes < 10); }
+  while (usart_rx_available(&uart)) { tick(&c); assert(++passes < 10); }
   assert(passes > 1 && c.state == LORA_RX_LISTEN);
 
   /* Oversized lines and receive errors recover instead of parsing suffixes. */
@@ -208,9 +222,9 @@ int main(void) {
   assert(stats.malformed_lines == 1 && stats.failures == 1 && stops);
   setup(&c); listening(&c);
   uart.fault = true;
-  service(&c, &uart, UART_DMA_NOTIFY_ERROR);
+  service(&c, &uart, USART_NOTIFY_ERROR);
   assert(c.state == LORA_WAIT_MODULE_REBOOT && stats.failures == 1);
-  service(&c, &uart, UART_DMA_NOTIFY_ERROR);
+  service(&c, &uart, USART_NOTIFY_ERROR);
   assert(stats.failures == 1); /* Stale error notification after restart. */
 
   /* UART completion and AT reply both have finite, independent deadlines. */
@@ -251,8 +265,8 @@ int main(void) {
 
   /* Tick rollover does not extend deadlines or force a one-tick polling loop. */
   setup(&c); now = UINT32_MAX - 10u; enter(&c, LORA_UART_SYNC, 500);
-  tick(&c); assert(wait_ticks(&c, &uart) == LORA_UART_TX_MS);
-  uart.tx_busy = false; assert(wait_ticks(&c, &uart) == LORA_COMMAND_MS);
+  tick(&c); assert(wait_ticks(&c, &uart) == LORA_POLL_MS);
+  uart.tx_busy = false; assert(wait_ticks(&c, &uart) == LORA_POLL_MS);
   uart.tx_busy = false; now += 499u; tick(&c); assert(stats.failures == 0);
   now++; tick(&c); assert(stats.timeouts == 1);
   puts("task state-machine tests passed");

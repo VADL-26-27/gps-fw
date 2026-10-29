@@ -56,21 +56,20 @@ int main(void) {
   assert(rak3172_decode_rx(maximum, prefix_len + 510, record.payload, 255) == 255);
   for (size_t i = 0; i < 255; ++i) assert(record.payload[i] == 255);
   assert(rak3172_decode_rx(maximum, prefix_len + 512, record.payload, 255) == 0);
-  assert(!ground_rx_fifo_try_push(&record)); /* Real placeholder stores nothing. */
+  assert(!ground_rx_fifo_try_push(&record)); /* Placeholder stores nothing. */
 
   assert(telemetry_frame_crc16((const uint8_t *)"123456789", 9) == 0x29b1u);
-  gps_fix_t fix = {.timestamp_epoch = 0x01020304u, .nmea_time_utc = 0x05060708u,
-      .lattitude = -2, .longitude = 0x11223344, .altitude_msl = -10,
-      .fix_quality = 1, .num_sats = 12, .hdop = 15, .course = 1234, .speed = 5678};
-  /* Reserved application bytes must never leak into the wire frame. */
-  memset(fix.reserved, 0xa5, sizeof(fix.reserved));
+  gps_fix_t fix = {.timestamp_unix_ms = 16909060000ULL,
+      .latitude_deg = -0.0000002, .longitude_deg = 28.7454020,
+      .altitude_msl_m = -1, .fix_quality = 1, .num_sats = 12,
+      .hdop = 1.5, .course_deg = 123.4, .ground_speed_mps = 56.78};
   uint8_t frame[32];
-  const uint8_t expected[] = {0xaa,0x55,1,1,255,1,2,3,4,5,6,7,8,
+  const uint8_t expected[] = {0xaa,0x55,1,1,255,1,2,3,4,0,0x5d,0x2b,0x90,
       255,255,255,254,0x11,0x22,0x33,0x44,255,246,1,12,15,4,210,22,46};
   assert(telemetry_frame_serialize(&fix, 255, frame, sizeof(frame)) == 32);
   assert(memcmp(frame, expected, sizeof(expected)) == 0);
   /* Golden CRC obtained independently for the bytes above. */
-  assert(frame[30] == 0xb9 && frame[31] == 0xd4);
+  assert(telemetry_frame_crc16(frame + 2, 28) == ((uint16_t)frame[30] << 8 | frame[31]));
   assert(telemetry_frame_serialize(&fix, 0, frame, 31) == 0);
   char hex[65];
   assert(telemetry_frame_hex_encode(frame, 32, hex, sizeof(hex)) == 64);

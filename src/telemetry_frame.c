@@ -1,4 +1,6 @@
 #include "telemetry_frame.h"
+#include <math.h>
+#include <limits.h>
 
 uint16_t telemetry_frame_crc16(const uint8_t *data, size_t len) {
   /* CRC-16/IBM-3740 (CCITT-FALSE): poly 1021, init FFFF, no reflection/xorout. */
@@ -19,6 +21,15 @@ static void put32(uint8_t *out, uint32_t n) {
   put16(out, (uint16_t)(n >> 16));
   put16(out + 2, (uint16_t)n);
 }
+/* Convert the GPS task's SI values to the existing version-1 wire units.
+ * Clamp before conversion so nonfinite/out-of-range fixes cannot cause UB. */
+static int32_t scaled(double value, double scale, int32_t low, int32_t high) {
+  if (!isfinite(value)) return 0;
+  value *= scale;
+  if (value <= low) return low;
+  if (value >= high) return high;
+  return (int32_t)round(value);
+}
 size_t telemetry_frame_serialize(const gps_fix_t *fix, uint8_t seq_num,
                                  uint8_t *out, size_t out_cap) {
   if (!fix || !out || out_cap < TELEMETRY_FRAME_LEN) return 0u;
@@ -27,16 +38,16 @@ size_t telemetry_frame_serialize(const gps_fix_t *fix, uint8_t seq_num,
   out[2] = TELEMETRY_VERSION;
   out[3] = TELEMETRY_MSG_GPS_FIX;
   out[4] = seq_num;
-  put32(out + 5, fix->timestamp_epoch);
-  put32(out + 9, fix->nmea_time_utc);
-  put32(out + 13, (uint32_t)fix->lattitude);
-  put32(out + 17, (uint32_t)fix->longitude);
-  put16(out + 21, (uint16_t)fix->altitude_msl);
+  put32(out + 5, (uint32_t)(fix->timestamp_unix_ms / 1000u));
+  put32(out + 9, (uint32_t)((fix->timestamp_unix_ms % 86400000u) / 10u));
+  put32(out + 13, (uint32_t)scaled(fix->latitude_deg, 1e7, INT32_MIN, INT32_MAX));
+  put32(out + 17, (uint32_t)scaled(fix->longitude_deg, 1e7, INT32_MIN, INT32_MAX));
+  put16(out + 21, (uint16_t)scaled(fix->altitude_msl_m, 10, INT16_MIN, INT16_MAX));
   out[23] = fix->fix_quality;
   out[24] = fix->num_sats;
-  out[25] = fix->hdop;
-  put16(out + 26, fix->course);
-  put16(out + 28, fix->speed);
+  out[25] = (uint8_t)scaled(fix->hdop, 10, 0, UINT8_MAX);
+  put16(out + 26, (uint16_t)scaled(fix->course_deg, 10, 0, UINT16_MAX));
+  put16(out + 28, (uint16_t)scaled(fix->ground_speed_mps, 100, 0, UINT16_MAX));
   put16(out + 30, telemetry_frame_crc16(out + 2, 28u));
   return TELEMETRY_FRAME_LEN;
 }

@@ -47,7 +47,8 @@ typedef struct {
 #define LORA_NOTIFY_NEW_FIX (1u << 3)
 
 void LoRa_Task(void *argument);
-/* Task context only; retains fixes published before LoRa_Task starts. */
+/* Task context only; requires gps_mailbox_init() before publishing.
+ * Retains the latest fix published before LoRa_Task starts. */
 void lora_task_publish_fix(const gps_fix_t *fix);
 lora_state_t lora_task_state_get(void);
 void lora_task_stats_get(lora_stats_t *out);

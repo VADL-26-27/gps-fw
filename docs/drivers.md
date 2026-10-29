@@ -1,21 +1,47 @@
 # Driver Design
 
-## STM32F411 DMA facts
+## Board selection
 
-STM32F411RET6 does not have a DMAMUX. Select each supported peripheral request with `CHSEL[2:0]` in the selected DMA stream's `DMA_SxCR` register. Allocate non-conflicting streams for USART6 RX, USART1 RX, USART1 TX, and SDIO before implementation.
+The current build targets STM32F413, but the final board is undecided. No USART,
+GPIO pins, DMA controller, streams, channels, or interrupt vectors are selected
+by the driver. `src/usart_board.c` contains the empty LoRa instance and radio
+control placeholders. An unset instance fails initialization without accessing
+hardware, and the LoRa task stays offline.
 
-The Cortex-M4 in this MCU does not have a data cache, so DMA cache-maintenance operations are not required.
+## USART + DMA driver
 
-## UART + DMA driver
+`inc/usart.h` and `src/usart.c` follow the `spi_t *port` pattern used in
+`flight-logic-fw`. Each `usart_t` supplies:
 
-Use a shared UART/DMA driver with per-instance configuration for USART6 and USART1.
+- USART registers, DMA controller, RX and TX DMA stream pointers.
+- USART error IRQ number and RX/TX DMA IRQ numbers.
+- RX/TX stream indices (0..7) and DMA channels (0..7).
+- Peripheral clock, baud rate, and a FreeRTOS-safe IRQ priority.
+- Clock/GPIO initialization and an optional USART reset callback.
+- Its own RX ring, transfer state, counters, and task notification target.
 
-1. Start RX DMA once in circular mode with a RAM ring buffer.
-2. On UART IDLE, DMA half/full, or error, ISR acknowledges the event and snapshots the DMA producer index.
-3. ISR uses an ISR-safe notification to wake the owning task.
-4. The task consumes newly written bytes and handles wraparound.
-5. For TX, the owner builds an immutable command in a private buffer, starts normal-mode TX DMA, and releases that buffer only after completion.
+Board code must select a valid hardware mapping: stream pointers, indices,
+channels, and vectors must agree. RX and TX use distinct streams on the supplied
+DMA controller. Clock callbacks enable both the USART and DMA clocks; reset
+callbacks must never reset a DMA controller shared with another peripheral.
+All three IRQs use the supplied, identical priority.
 
+RX uses circular DMA, with half/full and error interrupts. TX uses normal DMA,
+with completion and error interrupts. `usart_handle_irq()` handles USART errors
+only; RXNEIE, TXEIE, TCIE, and IDLEIE remain disabled. Board vector wrappers in
+`src/usart_irq.c` must forward to `usart_handle_irq()`,
+`usart_handle_rx_dma_irq()`, and `usart_handle_tx_dma_irq()` once chosen.
+
+Short RX bursts are discovered by sampling NDTR in task context. The LoRa task
+caps active waits at 10 ms so AT replies below a DMA half-buffer still get
+processed. A DMA TX-completion notification wakes the task, but buffer ownership
+is released only when polling observes USART TC (the last stop bit transmitted).
+Keep TX data unchanged until `usart_tx_busy()` returns false. A failed transfer
+retains ownership until a successful stop/recovery confirms the DMA is stopped.
+
+Each instance has one owning task. DMA keeps running during reads; ring overflow
+or an IRQ blackout spanning both half boundaries is reported as a fault. Choose
+a polling interval appropriate for the configured baud rate and ring size.
 ISRs never parse protocols, perform logging, or wait for a peripheral.
 
 ## SDIO + FatFs driver

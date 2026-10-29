@@ -1,5 +1,9 @@
 # Hardware Interfaces
 
+The final board is TBD. The pinout below describes the earlier proposed
+board and is provisional; the USART driver does not initialize these pins.
+Configure `src/usart_board.c` and `src/usart_irq.c` after board selection.
+
 The schematic is the electrical source of truth. UART directions below are from the MCU perspective: MCU TX connects to module RX and MCU RX connects to module TX.
 
 ## GNSS — MAX-M10S

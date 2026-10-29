@@ -5,23 +5,21 @@ The LoRa task decodes each valid `+EVT:RXP2P:` payload and calls
 a byte length and up to 255 raw bytes, including embedded zero bytes. They are
 not GPS fixes and do not use `gps_structs.h`. No received commands are executed.
 
-`src/ground_rx_fifo.c` is a placeholder: it returns false and stores nothing.
+`src/ground_rx_fifo.c` remains a placeholder handoff for the SD branch's FIFO.
+It returns false and stores nothing until connected to that queue.
 `received_packets` counts recognized packets; `rx_queued` counts accepted
-handoffs and `rx_dropped` counts rejected handoffs (including the placeholder).
-A rejected handoff does not prevent the radio from re-arming reception.
+handoffs and `rx_dropped` counts rejected handoffs. A rejected handoff does not
+prevent the radio from re-arming reception.
 
-To connect the eventual FIFO, replace the body of `ground_rx_fifo_try_push()`:
+The SD branch should replace the placeholder with a nonblocking, copying enqueue
+using its existing queue interface. The SD task owns dequeuing and storage I/O.
 
-1. Initialize a bounded queue before reception starts, or return false while
-   it is unavailable.
-2. Copy the entire record into the queue before returning. The passed pointer
-   refers to temporary task storage and must not be retained.
-3. Return immediately: true on enqueue, false when unavailable/full. For a
-   FreeRTOS queue whose item size is `sizeof(ground_rx_record_t)`, use
-   `xQueueSend(queue, record, 0) == pdPASS`.
-4. Have the future SD task dequeue records and write exactly `length` payload
-   bytes using the chosen log format. SD I/O must not run in this callback.
+GPS telemetry uses a separate one-element FreeRTOS mailbox. GPS producers call
+`gps_mailbox_publish()` with a fix and its acquisition tick. It overwrites an
+unsent value and notifies LoRa. LoRa is the sole consumer and retains a pending
+fix across failures, replacing it when a newer mailbox value arrives. The
+mailbox must be initialized before starting tasks or publishing data.
 
-The LoRa state machine needs no changes when replacing this placeholder. The
-SD task and queue allocation are still unimplemented. The RF configuration in
-`main()` is still NULL, so the radio remains offline until configured.
+No GPS task/FIFO implementation is present in this checkout. The RF
+configuration in `main()` is still NULL, so the radio remains offline until
+configured.

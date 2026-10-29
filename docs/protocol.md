@@ -19,6 +19,12 @@ The binary `GPS_FIX` frame is **32 bytes**. It is then hex encoded for RAK3172 `
 | `course` | `uint16_t` | 2 | degrees ×10 |
 | `speed` | `uint16_t` | 2 | m/s ×100 |
 
+The GPS task stores coordinates in degrees, altitude in meters, speed in m/s,
+course in degrees, and UTC in Unix milliseconds. Serialization converts to the
+wire units above, rounds scaled fields to the nearest integer, and clamps them
+to their wire ranges. Nonfinite numeric fields encode as zero. UTC time of day
+is derived from the Unix timestamp; struct padding is never transmitted.
+
 ### Frame wrapper — 32 bytes total
 
 | Field | Bytes | Value / purpose |

@@ -88,6 +88,26 @@ static bool rx_packet(const char *line, size_t len) {
   return true;
 }
 
+static uint8_t hex_value(char c) {
+  if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+  if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+  return (uint8_t)(c - 'A' + 10);
+}
+
+size_t rak3172_decode_rx(const char *line, size_t len, uint8_t *out, size_t cap) {
+  if (!line || !out || !prefix(line, len, "+EVT:RXP2P:") || !rx_packet(line, len))
+    return 0u;
+  const char *p = line + strlen("+EVT:RXP2P:");
+  /* rx_packet validated both metadata fields and their delimiters. */
+  while (*p++ != ':') { }
+  while (*p++ != ':') { }
+  size_t n = (size_t)(line + len - p) / 2u;
+  if (cap < n) return 0u;
+  for (size_t i = 0; i < n; ++i)
+    out[i] = (uint8_t)((hex_value(p[2u * i]) << 4) | hex_value(p[2u * i + 1u]));
+  return n;
+}
+
 rak3172_result_t rak3172_parse_result(const char *line, size_t len) {
   if (!line || !len) return RAK3172_RESULT_UNKNOWN;
   if (equals(line, len, "OK")) return RAK3172_RESULT_OK;

@@ -2,6 +2,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "lora_task.h"
+#include "gps_mailbox.h"
 
 /* Add #include "gps_task.h" when GPS_Task is implemented. */
 enum {
@@ -22,16 +23,17 @@ static void heartbeat_task(void *argument) {
 }
 
 int main(void) {
+  gps_mailbox_init();
   /* TBD: define a static lora_config_t with approved RF settings and pass its
    * address instead of NULL. The task runs but stays OFFLINE without them.
    * No GPS task is needed to create LoRa_Task; no position is sent until
-   * a producer calls lora_task_publish_fix() with a real parsed fix. */
+   * a GPS producer publishes a real parsed fix to gps_mailbox. */
   if (xTaskCreate(LoRa_Task, "LoRa", 1024, NULL, LORA_PRIORITY, NULL) != pdPASS) {
     for (;;) {
     }
   }
 
-  /* Future GPS integration: add its sources to C_SOURCES in Makefile, include
+  /* Future GPS integration: add its sources to build.sh, include
    * gps_task.h above, and create GPS_Task here before starting the scheduler.
    * Choose its stack depth from parser requirements and measured stack use:
    *
@@ -40,8 +42,9 @@ int main(void) {
    *   for (;;) {}
    * }
    *
-   * GPS_Task owns USART6 RX/parsing. After assembling a valid gps_fix_t, call
-   * lora_task_publish_fix(&fix) from task context, never from its UART ISR.
+   * GPS_Task owns USART6 RX/parsing. Publish a gps_mailbox_t containing
+   * the parsed fix and acquisition tick with gps_mailbox_publish() from task
+   * context. lora_task_publish_fix() also forwards to this mailbox.
    * Task creation order is not execution order; pre-start fixes are retained.
    */
 

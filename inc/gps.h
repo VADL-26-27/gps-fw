@@ -1,9 +1,10 @@
-#ifndef GPS_STRUCT_H_
-#define GPS_STRUCT_H_
+#ifndef GPS_H_
+#define GPS_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
-#include <stdint.h>
+#define PACKET_SIZE 100U
 
 typedef struct {
   uint32_t i_tow_ms; // GPS time of week, milliseconds
@@ -34,6 +35,16 @@ typedef struct {
   uint32_t crc;
 } gps_mailbox_t;
 
-_Static_assert(sizeof(gps_mailbox_t) == 56, "Unexpected gps_mailbox_t size");
+typedef struct {
+  gps_fix_t fix;
+  uint32_t sequence;
+} gps_transmit_t;
 
-#endif // GPS_STRUCT_H_
+_Static_assert(sizeof(gps_mailbox_t) == 56, "Unexpected gps_mailbox_t size");
+_Static_assert(sizeof(gps_transmit_t) == 44, "Unexpected gps_transmit_t size");
+
+bool validate_packet(const uint8_t *packet);
+void updateFix(const uint8_t *u_blox_packet, gps_mailbox_t *mailbox);
+uint32_t calc_crc(const gps_mailbox_t *mailbox);
+void fillPayloads(gps_mailbox_t *mailbox, gps_transmit_t *rf);
+#endif // GPS_H_

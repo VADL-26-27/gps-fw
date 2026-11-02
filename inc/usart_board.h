@@ -5,6 +5,7 @@
 
 extern usart_t uart5;
 extern usart_t uart2;
+extern usart_t uart1;
 
 void board_usart_init(void);
 #endif // USART_BOARD_H_

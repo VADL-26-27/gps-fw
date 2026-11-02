@@ -12,4 +12,6 @@ void delay_ms(uint32_t duration);
 void timer2_init_1hz(void);
 bool timer2_take_tick(void);
 extern volatile uint32_t timer2_ticks;
+/* Ticks merged into an already-pending foreground tick, rather than replayed. */
+extern volatile uint32_t timer2_coalesced_tick_count;
 #endif // TIMER_H_

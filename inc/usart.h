@@ -33,5 +33,6 @@ void usart_handle_irq(usart_t *port);
 
 void uart_5_enable_clock(void);
 void usart_2_enable_clock(void);
+void usart_1_enable_clock(void);
 
 #endif // USART_H_

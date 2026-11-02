@@ -26,6 +26,8 @@ done
 
 make all
 
+# ./test/run.sh
+
 if "$DO_FLASH"; then
     st-flash --reset write build/firmware.bin 0x08000000
 fi

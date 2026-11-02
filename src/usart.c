@@ -10,6 +10,11 @@ void usart_2_enable_clock(void) {
   RCC->APB1LPENR |= RCC_APB1LPENR_USART2LPEN;
 }
 
+void usart_1_enable_clock(void) {
+  RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+  RCC->APB2LPENR |= RCC_APB2LPENR_USART1LPEN;
+}
+
 void usart_init(usart_t *port) {
   init_buf(port->rx);
   init_buf(port->tx);

@@ -3,6 +3,7 @@
 static volatile uint32_t ms_ticks = 0;
 static volatile bool timer2_pending = false;
 volatile uint32_t timer2_ticks = 0;
+volatile uint32_t timer2_coalesced_tick_count = 0;
 
 void timer2_init_1hz(void)
 {
@@ -26,6 +27,7 @@ void timer2_init_1hz(void)
 
     timer2_pending = false;
     timer2_ticks = 0U;
+    timer2_coalesced_tick_count = 0U;
     TIM2->DIER = TIM_DIER_UIE;
     NVIC_ClearPendingIRQ(TIM2_IRQn);
     NVIC_SetPriority(TIM2_IRQn, 10U);
@@ -38,6 +40,9 @@ void TIM2_IRQHandler(void)
     if (TIM2->SR & TIM_SR_UIF) {
         TIM2->SR = 0U; /* TIM2 is dedicated to update interrupts. */
         ++timer2_ticks;
+        if (timer2_pending) {
+            ++timer2_coalesced_tick_count;
+        }
         timer2_pending = true;
     }
 }

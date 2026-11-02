@@ -5,6 +5,8 @@ static ring_buf uart5_rx;
 static ring_buf uart5_tx;
 static ring_buf uart2_rx;
 static ring_buf uart2_tx;
+static ring_buf uart1_rx;
+static ring_buf uart1_tx;
 
 static void hardwareUsart2Init(void) {
   // Clear PA2/PA3, Make PA2/PA3 Alternate Function Mode
@@ -41,6 +43,21 @@ static void hardwareUart5Init(void) {
   GPIOB->PUPDR &= ~((3U << (12 * 2)) | (3U << (13 * 2)));
 }
 
+static void hardwareUsart1Init(void) {
+  // USART1 IMU: PA9 TX and PA10 RX, alternate function 7.
+  GPIOA->MODER &= ~((3U << (9 * 2)) | (3U << (10 * 2)));
+  GPIOA->MODER |= (2U << (9 * 2)) | (2U << (10 * 2));
+
+  GPIOA->AFR[1] &= ~((0xFU << 4) | (0xFU << 8));
+  GPIOA->AFR[1] |= (7U << 4) | (7U << 8);
+
+  GPIOA->OSPEEDR |= (3U << (9 * 2)) | (3U << (10 * 2));
+
+  GPIOA->OTYPER &= ~(1U << 9);
+
+  GPIOA->PUPDR &= ~((3U << (9 * 2)) | (3U << (10 * 2)));
+}
+
 // The callback functions must be declared before these initializers.
 usart_t uart5 = {
     .regs = UART5,
@@ -64,7 +81,19 @@ usart_t uart2 = {
     .init_gpio = hardwareUsart2Init,
 };
 
+usart_t uart1 = {
+    .regs = USART1,
+    .irqn = USART1_IRQn,
+    .clock_hz = 16000000U,
+    .baud_rate = 115200U,
+    .rx = &uart1_rx,
+    .tx = &uart1_tx,
+    .enable_clock = usart_1_enable_clock,
+    .init_gpio = hardwareUsart1Init,
+};
+
 void board_usart_init(void) {
   usart_init(&uart5);
+  usart_init(&uart1);
   usart_init(&uart2);
 }

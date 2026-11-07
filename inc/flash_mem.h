@@ -43,7 +43,7 @@ typedef enum {
   FLASH_STATE_VERIFY_DONE
 } flash_state_t;
 
-typedef struct {
+typedef struct flash {
   spi_t *spi;
 
   void (*cs_low)(void);

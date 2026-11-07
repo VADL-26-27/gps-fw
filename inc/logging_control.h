@@ -3,8 +3,9 @@
 
 #include <stdbool.h>
 
-/* RAM-only latch: false after boot/reset, true after BEGIN_LOG on USART2.
- * There is no stop command and this state is never saved to external flash.
+/* BEGIN_LOG enables recording only if the flash logger is ready. LOG_END stops
+ * accepting records and flushes them. Reset always disables recording.
+ * LOG_DUMP, LOG_CLEAR and LOG_STATUS are also accepted, CR/LF terminated.
  */
 extern volatile bool logging_enabled;
 

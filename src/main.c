@@ -7,6 +7,7 @@
 #include "lora.h"
 #include "telemetry.h"
 #include "logging_control.h"
+#include "log.h"
 
 /* RUI3 AT firmware. UART5: PB13 TX, PB12 RX, 115200 8N1.
  * USART2 console: PA2 TX, PA3 RX, 115200 8N1.
@@ -19,11 +20,9 @@ gps_mailbox_t
     logPacket; /* Stable 1 Hz snapshot until the next prepared record. */
 volatile uint32_t gnss_uart_fault_count;
 volatile uint32_t
-    logging_sample_count; /* Eligible snapshots; not flash writes. */
+    logging_sample_count; /* Successfully queued snapshots; not flash writes. */
 static uint32_t gnss_rx_errors;
 static uint32_t gnss_rx_drops;
-
-static uint32_t last_confirmed = 0U;
 
 static bool gnss_uart_fault(void) {
   if (gnss_rx_errors == uart1.rx_error_count &&
@@ -58,28 +57,24 @@ int main(void) {
   board_usart_init();
   logging_control_init();
   board_spi_init();
+  logger_init(&flash);
   gps_stream_init(&gnss);
   lora_init();
 
   // Q43 GNSS Module has default output rate of 10 Hz, we will use that
   while (1) {
+    spi_poll(&spi1);
+    flash_poll(&flash);
+    logger_poll();
     logging_control_poll();
     lora_poll();
-
-    // spi_poll(&spi1);
-    // flash_poll(&flash);
 
     poll_gnss();
 
     if (timer2_take_tick() &&
         telemetry_tick(&gnss, &currFix, now_ms(), &logPacket, &rfPacket)) {
-      if (logging_enabled) {
+      if (logging_enabled && logger_enqueue(&logPacket)) {
         ++logging_sample_count;
-        /* Enqueue a COPY of logPacket here at 1 Hz when SPI logging is added.
-         * This runs even if the radio was busy/unavailable. No record is made
-         * for an unavailable or stale fix. logPacket is reused next tick.
-         * All logging enqueues belong inside this BEGIN_LOG gate.
-         */
       }
     }
   }

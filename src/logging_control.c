@@ -1,79 +1,108 @@
 #include "logging_control.h"
+#include "log.h"
 #include "usart_board.h"
+#include <string.h>
 
 volatile bool logging_enabled;
-static const uint8_t begin_command[] = "BEGIN_LOG";
-static const uint8_t enabled_reply[] = "LOGGING_ENABLED\r\n";
-static uint32_t matched;
-static uint32_t rx_errors;
-static uint32_t rx_drops;
-static bool discard_line;
-static bool at_line_boundary;
-static bool reply_pending;
+static char command[24];
+static uint32_t length, rx_errors, rx_drops;
+static bool discard_line, at_boundary, dump_active;
+static const char *reply;
 
-static void reset_command(bool discard) {
-  matched = 0U;
+static void reset_line(bool discard) {
+  length = 0U;
   discard_line = discard;
 }
 
 void logging_control_init(void) {
   logging_enabled = false;
-  reset_command(false);
-  at_line_boundary = true;
-  reply_pending = false;
+  reset_line(false);
+  at_boundary = true;
+  dump_active = false;
+  reply = NULL;
   rx_errors = uart2.rx_error_count;
   rx_drops = uart2.rx_drop_count;
 }
 
-static bool receive_byte(uint8_t byte) {
-  if (byte == '\r' || byte == '\n') {
-    bool complete = !discard_line && matched == sizeof(begin_command) - 1U;
-    reset_command(false);
-    at_line_boundary = true;
-    return complete;
+static bool send_dump(const uint8_t *data, uint32_t size) {
+  return usart_write(&uart2, data, size);
+}
+
+static bool rx_fault(void) {
+  return rx_errors != uart2.rx_error_count || rx_drops != uart2.rx_drop_count;
+}
+
+static void execute_command(void) {
+  if (strcmp(command, "BEGIN_LOG") == 0) {
+    reply = logger_start() ? "LOGGING_ENABLED\r\n" : "BEGIN_LOG REFUSED\r\n";
+  } else if (strcmp(command, "LOG_END") == 0) {
+    reply = logger_finish() ? logger_status_reply() : "LOG_END REFUSED\r\n";
+  } else if (strcmp(command, "LOG_CLEAR") == 0) {
+    reply = logger_request_clear() ? "LOG CLEARING\r\n" : "LOG_CLEAR REFUSED\r\n";
+  } else if (strcmp(command, "LOG_DUMP") == 0) {
+    dump_active = logger_request_dump();
+    if (!dump_active) reply = "LOG_DUMP REFUSED\r\n";
+  } else if (strcmp(command, "LOG_STATUS") == 0) {
+    reply = logger_status_reply();
   }
-  at_line_boundary = false;
-  if (!discard_line) {
-    if (matched >= sizeof(begin_command) - 1U || byte != begin_command[matched]) {
-      discard_line = true;
-    } else {
-      ++matched;
-    }
-  }
-  return false;
 }
 
 void logging_control_poll(void) {
-  bool fault = rx_errors != uart2.rx_error_count || rx_drops != uart2.rx_drop_count;
-  if (fault) {
-    reset_command(true);
-    at_line_boundary = false;
+  logging_enabled = logger_is_recording();
+  if (dump_active) {
+    /* Binary stream owns USART2. GNSS and LoRa continue in the main loop.
+     * Ignore commands sent during the stream so they cannot erase the log. */
+    uint8_t byte;
+    for (uint32_t budget = BUFFER_SIZE; budget && usart_read(&uart2, &byte, 1U);
+         --budget) {
+      at_boundary = byte == '\r' || byte == '\n';
+    }
+    if (logger_dump_poll(send_dump)) {
+      dump_active = false;
+      reset_line(!at_boundary);
+    }
+    rx_errors = uart2.rx_error_count;
+    rx_drops = uart2.rx_drop_count;
+    return;
   }
-  bool begin_seen = false;
+  if (reply != NULL) {
+    if (!usart_write(&uart2, (const uint8_t *)reply, (uint32_t)strlen(reply)))
+      return;
+    reply = NULL;
+  }
+
+  bool fault = rx_fault();
+  if (fault) { reset_line(true); at_boundary = false; }
+  bool complete = false;
   uint8_t byte;
   for (uint32_t budget = BUFFER_SIZE; budget != 0U; --budget) {
-    if (!usart_read(&uart2, &byte, 1U)) {
-      break;
-    }
-    if (receive_byte(byte)) {
-      begin_seen = true;
+    if (!usart_read(&uart2, &byte, 1U)) break;
+    if (byte == '\r' || byte == '\n') {
+      at_boundary = true;
+      if (!discard_line && length != 0U) {
+        command[length] = '\0';
+        complete = true;
+        break; /* Process commands in order, including BEGIN_LOG then LOG_END. */
+      }
+      reset_line(false);
+    } else {
+      at_boundary = false;
+      if (byte == 0U || length == sizeof(command) - 1U) discard_line = true;
+      if (!discard_line) command[length++] = (char)byte;
     }
   }
-  if (fault || rx_errors != uart2.rx_error_count || rx_drops != uart2.rx_drop_count) {
-    /* Do not arm from a batch with transport corruption. Keep an existing
-     * session armed, and discard any incomplete line before parsing again.
-     */
-    begin_seen = false;
-    reset_command(!at_line_boundary);
+  if (fault || rx_fault()) {
+    complete = false;
+    reset_line(!at_boundary);
   }
   rx_errors = uart2.rx_error_count;
   rx_drops = uart2.rx_drop_count;
-  if (begin_seen) {
-    logging_enabled = true;
-    reply_pending = true; /* Repeated commands are harmless and re-acknowledged. */
+  if (complete) {
+    execute_command();
+    reset_line(false);
   }
-  if (reply_pending &&
-      usart_write(&uart2, enabled_reply, sizeof(enabled_reply) - 1U)) {
-    reply_pending = false;
-  }
+  logging_enabled = logger_is_recording();
+  if (reply != NULL &&
+      usart_write(&uart2, (const uint8_t *)reply, (uint32_t)strlen(reply)))
+    reply = NULL;
 }

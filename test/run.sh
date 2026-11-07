@@ -30,3 +30,9 @@ run_test test_receiver g++ -std=c++11 test/test_receiver.cpp
 
 run_test test_logging_control gcc -std=c11 -Itest/lora-test-include -Iinc \
     src/logging_control.c test/test_logging_control.c
+
+run_test test_log gcc -std=c11 -DFLASH_CAPACITY_BYTES=20480U \
+    -Itest/log-test-include -Itest/lora-test-include -Iinc \
+    src/gps.c src/log.c test/test_log.c
+
+python test/test_gps_log.py

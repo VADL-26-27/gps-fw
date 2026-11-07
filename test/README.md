@@ -17,9 +17,14 @@ These are host simulations; they do not flash hardware.
 - `test_lora.c`: RAK configuration, command encoding, fragmented UART replies,
   TX completion, errors, timeouts, and recovery.
 - `test_receiver.cpp`: the actual Heltec payload decoder and sequence tracker.
-- `test_logging_control.c`: disabled-at-boot logging gate, exact `BEGIN_LOG`
-  lines, split commands, repeated commands, reset, malformed input, UART faults,
-  and nonblocking acknowledgment retries.
+- `test_logging_control.c`: begin/end/dump/clear/status commands, disabled boot,
+  split/malformed commands, command order, UART faults, dump exclusivity, and
+  nonblocking acknowledgment retries.
+- `test_log.c`: asynchronous flash model, owned record copies, queue overflow,
+  partial flush/end, dump backpressure, reboot and torn-write protection, and
+  clearing the entire log region while preserving sector zero.
+- `test_gps_log.py`: decode the C logger's actual dump using Python/zlib; verify
+  CSV values, CRCs, corrupt-page recovery, and interrupted sessions.
 
 `telemetry_fixture.h` is a shared independent wire-format vector. The LoRa test
 checks that the transmitter emits it, and the receiver test checks its decoded

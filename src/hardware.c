@@ -12,7 +12,7 @@ void ledInit(void) {
   GPIOA->PUPDR &= ~(3U << (0 * 2));
 
   GPIOA->BSRR = (1U << (16 + 0));
-  GPIOA->BSRR |= (1U << 0);
+  // GPIOA->BSRR |= (1U << 0);
 }
 
 void timer_init(void) {
@@ -52,23 +52,6 @@ void clock_init_hse(void) {
   SystemCoreClockUpdate();
 }
 
-static void clock_init_hsi(void) {
-  /* Explicitly select HSI, including when entered after a debug restart
-   * that left a different system clock selected.
-   */
-  RCC->CR |= RCC_CR_HSION;
-  while (!(RCC->CR & RCC_CR_HSIRDY)) {
-  }
-
-  RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | RCC_CFGR_SW_HSI;
-  while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_HSI) {
-  }
-
-  /* HCLK, PCLK1 and PCLK2 are all 16 MHz for this UART test. */
-  RCC->CFGR &= ~(RCC_CFGR_HPRE | RCC_CFGR_PPRE1 | RCC_CFGR_PPRE2);
-  SystemCoreClockUpdate();
-}
-
 void hardwareInit(void) {
   // Enable clock
   RCC->AHB1ENR |=
@@ -78,9 +61,7 @@ void hardwareInit(void) {
 
   (void)RCC->AHB1ENR;
   (void)RCC->AHB1LPENR;
-
-  clock_init_hsi();
-
+  clock_init_hse();
   timer_init();
   timer2_init_1hz();
   // -- LED --

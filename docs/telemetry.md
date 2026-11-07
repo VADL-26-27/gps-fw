@@ -14,35 +14,33 @@ attempt. Time without usable UTC is represented by `unix_time_ms == 0`.
 `rfPacket.sequence` instead count prepared **1 Hz records** and match each other.
 They restart at one after an MCU reset and wrap naturally at 32 bits.
 
-## Adding SPI logging
+## SPI logging
 
 Logging is **disabled after every boot or MCU reset**. Send the exact command
 `BEGIN_LOG` followed by CR, LF, or CRLF on USART2 (115200 baud, 8N1). USART2 RX
 is PA3; TX is PA2. Use a connected 3.3 V UART console/VCP; the ST-Link SWD
 connection alone does not deliver these UART bytes. The reply is
-`LOGGING_ENABLED`. The logging gate stays enabled until power-off or reset.
-Repeated `BEGIN_LOG` commands are acknowledged without restarting the session.
-There is no stop command or persistent logging-enable setting.
+`LOGGING_ENABLED` when the flash logger is READY. `LOG_END` disables new enqueues
+and flushes pending records. `LOG_STATUS`, `LOG_DUMP`, and `LOG_CLEAR` provide
+status, extraction, and explicit erasure. Reboot preserves the log and disables
+recording; occupied flash refuses another session until explicitly cleared.
+See [SPI logging commands and download instructions](logging.md).
 
 GNSS parsing, snapshots and radio transmission run before and after `BEGIN_LOG`.
-Only logging eligibility is gated. The successful `telemetry_tick()` branch in
-`src/main.c`, inside `if (logging_enabled)`, is the enqueue point. Copy the
-complete `logPacket` into the logging buffer there, once per second.
-It already has its record sequence and CRC. This branch executes even when the
-radio is unavailable, busy, or cannot queue a command. It does not mean the radio
-has finished transmitting. `logPacket` is reused on the next successful tick,
-so an asynchronous logger must own a copy rather than retain this pointer.
-`logging_sample_count` counts eligible snapshots after the command; it does not
-count flash writes. The SPI enqueue/writer is still a placeholder. When logging
-is added, startup must continue to preserve existing flash contents while the
-gate is disabled; `BEGIN_LOG` itself performs no erase, probe or program.
+Only flash record enqueues are gated. The successful `telemetry_tick()` branch
+in `src/main.c` copies `logPacket` into `logger_enqueue()` once per second while
+enabled. This runs even when the radio is unavailable, busy, or cannot queue a
+command; it does not mean the radio has finished transmitting.
+`logging_sample_count` counts accepted RAM enqueues. The logger programs groups
+of four records asynchronously and verifies them through the flash driver.
+`logger_stats.written_records` counts completed, verified flash records.
 
 ## Debugger watches
 
 - `gnss`: valid/invalid/duplicate fix counts, framing/checksum errors, availability
   and the local millisecond time of the last new valid epoch.
 - `gnss_uart_fault_count`, `uart1.rx_error_count`, `uart1.rx_drop_count`.
-- `logging_enabled`, `logging_sample_count`.
+- `logging_enabled`, `logging_sample_count`, `logger_status`, `logger_stats`.
 - `telemetry_stats`: processed ticks, records, queued transmissions, and mutually
   exclusive skip reasons for each tick (no fix, stale, unavailable, busy, queue).
 - `timer2_ticks`, `timer2_coalesced_tick_count`: elapsed timer interrupts and ticks
@@ -86,7 +84,7 @@ The flash record's CRC is not included in this RF payload. Local RAK
 
 For hardware verification, compare `rfPacket` with the receiver's printed
 coordinates/units, verify records prepare at 1 Hz (RF sequences may have gaps),
-send `BEGIN_LOG` to enable logging eligibility, disconnect GNSS to check
+send `BEGIN_LOG` to enable logging, disconnect GNSS to check
 stale suppression, and temporarily remove radio availability to check that
 records continue preparing while RF skip counters increase. No hardware test is
 performed by the host tests in `test/`.

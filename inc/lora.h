@@ -7,6 +7,7 @@
 #define LORA_P2P_COMMAND "AT+P2P=915000000:12:0:3:8:22\r\n"
 #define LORA_COMMAND_TIMEOUT_MS 2000U
 #define LORA_TX_TIMEOUT_MS 5000U
+#define LORA_NO_LOCK_MESSAGE "NO LOCK FOUND"
 
 typedef enum {
   LORA_TX_IDLE,
@@ -30,6 +31,9 @@ bool lora_tx_busy(void);
  * CONFIRMED means local RF TX finished; it is not a remote receiver ACK.
  */
 bool transmit_packet(const gps_transmit_t *packet);
+/* Sends exactly the ASCII status text, without a trailing NUL or newline.
+ * Uses the same readiness, busy, timeout and TX confirmation handling. */
+bool transmit_no_lock(void);
 
 /* Debugger watches. Counters are cumulative, including across lora_init(). */
 extern volatile lora_tx_status_t rak_tx_status;

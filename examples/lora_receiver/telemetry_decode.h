@@ -6,6 +6,12 @@
 #include <string.h>
 
 /* Wire offsets are explicit; no compiler packing or native endianness assumed. */
+inline bool isNoLockMessage(const uint8_t *data, size_t length) {
+  static const char message[] = "NO LOCK FOUND";
+  return data != nullptr && length == sizeof(message) - 1U &&
+         memcmp(data, message, sizeof(message) - 1U) == 0;
+}
+
 struct DecodedTelemetry {
   uint32_t i_tow_ms;
   int32_t latitude_e7, longitude_e7, altitude_msl_mm;

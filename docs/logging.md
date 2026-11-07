@@ -41,6 +41,8 @@ logger's eight-record queue (two groups of four). Radio busy/failure does not
 prevent logging. Unusable/stale fixes still produce no logging record under
 the existing GNSS policy. GNSS updates and LoRa servicing continue during
 logging, clearing, and dumping.
+While GNSS is unavailable, unusable or stale, LoRa attempts to send
+`NO LOCK FOUND` when ready and idle; these status messages are never logged.
 
 Four records fit in one 256-byte flash page, so normal 1 Hz logging programs
 one data page every four seconds. A partial page flushes after five seconds,

@@ -302,8 +302,9 @@ void lora_poll(void) {
   }
 }
 
-bool transmit_packet(const gps_transmit_t *packet) {
-  if (packet == NULL) {
+static bool transmit_payload(const uint8_t *data, uint32_t data_length) {
+  if (data == NULL || data_length == 0U ||
+      data_length > sizeof(gps_transmit_t)) {
     return false;
   }
   lora_poll(); /* Consume old replies before starting a new transaction. */
@@ -311,15 +312,13 @@ bool transmit_packet(const gps_transmit_t *packet) {
     return false;
   }
 
-  const uint8_t *data = (const uint8_t *)packet;
-
-  uint8_t command[sizeof(prefix) - 1U + 2U * sizeof(*packet) + 2U];
+  uint8_t command[sizeof(prefix) - 1U + 2U * sizeof(gps_transmit_t) + 2U];
   uint32_t length = 0U;
 
   memcpy(command, prefix, sizeof(prefix) - 1U);
   length = sizeof(prefix) - 1U;
 
-  for (uint32_t i = 0U; i < sizeof(*packet); ++i) {
+  for (uint32_t i = 0U; i < data_length; ++i) {
     command[length++] = hex[data[i] >> 4];
     command[length++] = hex[data[i] & 0x0FU];
   }
@@ -334,4 +333,13 @@ bool transmit_packet(const gps_transmit_t *packet) {
   rak_tx_status = LORA_TX_WAIT_OK;
   ++rak_attempt_count;
   return true;
+}
+
+bool transmit_packet(const gps_transmit_t *packet) {
+  return transmit_payload((const uint8_t *)packet, sizeof(*packet));
+}
+
+bool transmit_no_lock(void) {
+  static const uint8_t message[] = LORA_NO_LOCK_MESSAGE;
+  return transmit_payload(message, sizeof(message) - 1U);
 }

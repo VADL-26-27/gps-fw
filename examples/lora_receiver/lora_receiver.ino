@@ -1,5 +1,5 @@
 // Heltec WiFi LoRa 32 V4 receiver. RadioLib 7.4.0+ (built with 7.8.1).
-// Receives 44-byte GPS telemetry from the STM32 / RAK3172 firmware.
+// Receives 44-byte GPS telemetry or ASCII NO LOCK FOUND from STM32 / RAK3172.
 // Open the serial monitor at 115200 baud.
 #include <Arduino.h>
 #include <SPI.h>
@@ -19,6 +19,7 @@ SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_RST, LORA_BUSY);
 volatile bool receivedFlag = false;
 TelemetrySequenceTracker sequences;
 uint32_t goodPackets = 0, crcErrors = 0, invalidPackets = 0;
+uint32_t noLockPackets = 0;
 
 void ARDUINO_ISR_ATTR onReceive() { receivedFlag = true; }
 
@@ -79,6 +80,13 @@ void loop() {
   }
   if (result != RADIOLIB_ERR_NONE) {
     Serial.printf("Receive error: %d\n", result);
+    return;
+  }
+
+  if (isNoLockMessage(payload, length)) {
+    ++noLockPackets;
+    Serial.printf("NO LOCK FOUND | RSSI=%.1f dBm | SNR=%.1f dB | Status packets=%lu\n",
+                  rssi, snr, (unsigned long)noLockPackets);
     return;
   }
 

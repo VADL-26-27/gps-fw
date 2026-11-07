@@ -7,8 +7,12 @@ second. No mailbox access or radio operation runs in the timer ISR.
 On each consumed tick, `telemetry_tick()` prepares `logPacket` and `rfPacket`
 from the latest usable fix. A checksum-valid NAV-PVT reporting an unusable fix
 stops records immediately. A missing or repeatedly replayed epoch becomes stale
-after `GPS_FIX_MAX_AGE_MS` (1500 ms). Invalid/stale fixes produce no record or RF
-attempt. Time without usable UTC is represented by `unix_time_ms == 0`.
+after `GPS_FIX_MAX_AGE_MS` (1500 ms). Without a fresh usable fix, the tick instead
+attempts to transmit the exact 13-byte ASCII message `NO LOCK FOUND`. It creates
+no flash record and leaves the last record/RF snapshot unchanged. This also
+covers startup with no GNSS bytes and a disconnected GNSS. When fresh valid fixes
+return, binary GPS transmission and eligible logging resume automatically.
+Time without usable UTC is represented by `unix_time_ms == 0`.
 
 `currFix.sequence` counts accepted GNSS epochs. `logPacket.sequence` and
 `rfPacket.sequence` instead count prepared **1 Hz records** and match each other.
@@ -41,8 +45,11 @@ of four records asynchronously and verifies them through the flash driver.
   and the local millisecond time of the last new valid epoch.
 - `gnss_uart_fault_count`, `uart1.rx_error_count`, `uart1.rx_drop_count`.
 - `logging_enabled`, `logging_sample_count`, `logger_status`, `logger_stats`.
-- `telemetry_stats`: processed ticks, records, queued transmissions, and mutually
-  exclusive skip reasons for each tick (no fix, stale, unavailable, busy, queue).
+- `telemetry_stats`: processed ticks, valid GPS records, total queued GPS/status
+  transmissions, and radio skip/failure reasons. `skipped_no_fix_count` and
+  `skipped_stale_count` count skipped GPS records; those ticks now attempt status
+  transmission. `no_lock_count` counts status ticks, and
+  `no_lock_tx_queued_count` counts successfully queued status transmissions.
 - `timer2_ticks`, `timer2_coalesced_tick_count`: elapsed timer interrupts and ticks
   merged because foreground processing had not yet consumed the previous flag.
   Missed ticks are counted, not replayed as a burst of transmissions.
@@ -58,6 +65,10 @@ monitor at 115200. Both radios use 915 MHz, SF12, 125 kHz bandwidth, CR4/8,
 eight-symbol preamble, and the private sync word.
 These SF12 settings take about three seconds per 44-byte transmission, so RF
 sends run slower than the 1 Hz logging schedule and busy skips are expected.
+The timer requests a GPS or no-lock transmission once per second, but sends
+only when the radio is configured and idle. Busy ticks are skipped instead of
+building a backlog. `rak_attempt_count` and `rak_tx_confirmed_count` count both
+GPS packets and no-lock status messages.
 
 The sketch rejects radio CRC errors, validates payload length and position,
 prints position, accuracy, velocity, status and sequence, and reports sequence
@@ -66,7 +77,12 @@ transmitter-side skipped sends, so they do not by themselves measure RF loss.
 A backward sequence may mean reboot or reordering; the receiver starts a new
 baseline. Sequence numbers alone cannot identify a reboot unambiguously.
 
-The RF payload is exactly **44 bytes**, with little-endian multibyte fields:
+The updated receiver prints `NO LOCK FOUND` and counts `noLockPackets` for the
+exact text status, after radio CRC validation and before binary GPS decoding.
+Status packets do not enter the GPS sequence tracker. Upload the updated
+receiver sketch along with the STM32 firmware to recognize these messages.
+
+The valid-fix RF payload is exactly **44 bytes**, with little-endian multibyte fields:
 
 | Offset | Field | Type / units |
 | --- | --- | --- |
@@ -84,7 +100,8 @@ The flash record's CRC is not included in this RF payload. Local RAK
 
 For hardware verification, compare `rfPacket` with the receiver's printed
 coordinates/units, verify records prepare at 1 Hz (RF sequences may have gaps),
-send `BEGIN_LOG` to enable logging, disconnect GNSS to check
-stale suppression, and temporarily remove radio availability to check that
+send `BEGIN_LOG` to enable logging, disconnect GNSS to check that logging stops
+and `NO LOCK FOUND` is received after the freshness timeout, then reconnect to
+verify automatic GPS/logging recovery. Temporarily remove radio availability to check that
 records continue preparing while RF skip counters increase. No hardware test is
 performed by the host tests in `test/`.

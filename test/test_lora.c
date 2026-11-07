@@ -81,11 +81,13 @@ int main(void) {
   uint8_t *bytes = (uint8_t *)&packet;
   for (uint32_t i = 0; i < sizeof(packet); ++i) bytes[i] = (uint8_t)i;
   assert(!transmit_packet(&packet));
+  assert(!transmit_no_lock());
   ready(true);
   assert(!transmit_packet(NULL));
   uint32_t attempts = rak_attempt_count, confirmed = rak_tx_confirmed_count;
   allow_queue = false;
   assert(!transmit_packet(&packet));
+  assert(!transmit_no_lock());
   assert(rak_attempt_count == attempts && rak_tx_status == LORA_TX_IDLE);
   allow_queue = true;
   assert(transmit_packet(&packet));
@@ -95,6 +97,7 @@ int main(void) {
   assert(strcmp(rak_last_command, sent) == 0);
   uint32_t sends = sent_count;
   assert(!transmit_packet(&packet) && sent_count == sends);
+  assert(!transmit_no_lock() && sent_count == sends);
   reply("\r\nO");
   assert(rak_tx_status == LORA_TX_WAIT_OK);
   reply("K\r\n+EVT:TXP2P DO");
@@ -116,6 +119,17 @@ int main(void) {
   assert(transmit_packet(&fixture));
   assert(strcmp(sent, "AT+PSEND=" TELEMETRY_FIXTURE_HEX "\r\n") == 0);
   reply("OK\r\n+EVT:TXP2P DONE\r\n");
+
+  attempts = rak_attempt_count; confirmed = rak_tx_confirmed_count;
+  assert(transmit_no_lock());
+  assert(strcmp(sent, "AT+PSEND=4E4F204C4F434B20464F554E44\r\n") == 0);
+  assert(rak_attempt_count == attempts + 1U && lora_tx_busy());
+  assert(!transmit_no_lock() && !transmit_packet(&packet));
+  reply("OK\r\n");
+  assert(rak_tx_status == LORA_TX_WAIT_DONE);
+  assert(rak_tx_confirmed_count == confirmed);
+  reply("+EVT:TXP2P DONE\r\n");
+  assert(rak_tx_confirmed_count == confirmed + 1U && !lora_tx_busy());
 
   assert(transmit_packet(&packet));
   reply("+EVT:TXP2P DONE\r\n"); /* DONE alone cannot confirm a new command. */
@@ -184,5 +198,6 @@ int main(void) {
   advance(LORA_COMMAND_TIMEOUT_MS);
   assert(rak_timeout_count == timeouts + 1U && !lora_is_ready());
   puts("LoRa tests passed: configuration, encoding, split replies, busy guard, "
-       "confirmation, duplicates, errors, timeouts, wraparound, recovery.");
+       "confirmation, duplicates, errors, timeouts, wraparound, recovery, "
+       "no-lock text encoding/confirmation.");
 }

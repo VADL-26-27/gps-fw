@@ -7,12 +7,17 @@
 
 static bool radio_ready = true, radio_busy, queue_ok = true;
 static uint32_t send_calls;
+static uint32_t no_lock_calls;
 static gps_transmit_t last_sent;
 bool lora_is_ready(void) { return radio_ready; }
 bool lora_tx_busy(void) { return radio_busy; }
 bool transmit_packet(const gps_transmit_t *packet) {
   ++send_calls;
   last_sent = *packet;
+  return queue_ok;
+}
+bool transmit_no_lock(void) {
+  ++no_lock_calls;
   return queue_ok;
 }
 
@@ -135,6 +140,8 @@ static void test_tick(void) {
   gps_transmit_t rf = {0};
   assert(!telemetry_tick(&s, &latest, 0, &record, &rf));
   assert(telemetry_stats.skipped_no_fix_count == 1 && send_calls == 0);
+  assert(no_lock_calls == 1 && telemetry_stats.no_lock_tx_queued_count == 1);
+  assert(telemetry_stats.record_count == 0); /* No flash record without lock. */
   uint8_t p[PACKET_SIZE];
   /* Ten GNSS epochs create only one record when the 1 Hz tick is handled. */
   for (unsigned i = 0; i < 10; ++i) {
@@ -170,12 +177,42 @@ static void test_tick(void) {
   feed(&s, &latest, p, sizeof(p), 1400);
   assert(!telemetry_tick(&s, &latest, 1401, &record, &rf));
   assert(telemetry_stats.skipped_no_fix_count == 2);
-  assert(telemetry_stats.record_count == 4 && telemetry_stats.tx_queued_count == 1);
+  assert(telemetry_stats.record_count == 4 && telemetry_stats.tx_queued_count == 4);
+  assert(no_lock_calls == 3 && telemetry_stats.no_lock_count == 3);
+  assert(telemetry_stats.no_lock_tx_queued_count == 3);
+  assert(memcmp(&record, &saved, sizeof(record)) == 0);
+  assert(memcmp(&rf, &saved_rf, sizeof(rf)) == 0);
+
+  /* Status uses the same radio guards; busy/unready ticks never queue it. */
+  radio_busy = true;
+  assert(!telemetry_tick(&s, &latest, 1500, &record, &rf));
+  assert(no_lock_calls == 3 && telemetry_stats.skipped_radio_busy_count == 2);
+  radio_busy = false; radio_ready = false;
+  assert(!telemetry_tick(&s, &latest, 1600, &record, &rf));
+  assert(no_lock_calls == 3 && telemetry_stats.skipped_radio_unready_count == 2);
+  radio_ready = true; queue_ok = false;
+  assert(!telemetry_tick(&s, &latest, 1700, &record, &rf));
+  assert(no_lock_calls == 4 && telemetry_stats.tx_queue_failed_count == 2);
+  queue_ok = true;
+  assert(!telemetry_tick(&s, &latest, 1800, &record, &rf));
+  assert(no_lock_calls == 5 && telemetry_stats.no_lock_tx_queued_count == 4);
+  assert(telemetry_stats.record_count == 4);
+  assert(memcmp(&record, &saved, sizeof(record)) == 0);
+  assert(memcmp(&rf, &saved_rf, sizeof(rf)) == 0);
+
+  /* Reacquiring lock switches back to GPS without counting status as records. */
+  frame(p, 1100);
+  assert(feed(&s, &latest, p, sizeof(p), 1900) == 1);
+  assert(telemetry_tick(&s, &latest, 1901, &record, &rf));
+  assert(record.sequence == 5 && record.crc == calc_crc(&record));
+  assert(last_sent.fix.i_tow_ms == 1100 && last_sent.sequence == 5);
+  assert(telemetry_stats.record_count == 5 && no_lock_calls == 5);
 }
 
 int main(void) {
   test_stream();
   test_tick();
   puts("Pipeline tests passed: framing, byte loss/insertion, other UBX messages, "
-       "freshness, fix loss, 1 Hz snapshots, sequences, CRC, radio skips.");
+       "freshness, fix loss, 1 Hz snapshots, sequences, CRC, radio skips, "
+       "no-lock status without log records, lock recovery.");
 }

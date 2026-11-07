@@ -11,7 +11,7 @@ void ledInit(void) {
   // set PU/PD to off
   GPIOA->PUPDR &= ~(3U << (0 * 2));
 
-  GPIOA->BSRR = (1U << (16 + 0));
+  GPIOA->BSRR = (1U << (0));
   // GPIOA->BSRR |= (1U << 0);
 }
 

@@ -8,6 +8,13 @@ static void put32(uint8_t *p, uint32_t value) {
   for (unsigned i = 0; i < 4; ++i) p[i] = uint8_t(value >> (8U * i));
 }
 int main() {
+  const uint8_t no_lock[] = "NO LOCK FOUND";
+  assert(isNoLockMessage(no_lock, sizeof(no_lock) - 1U));
+  assert(!isNoLockMessage(no_lock, sizeof(no_lock))); /* No trailing NUL on air. */
+  assert(!isNoLockMessage(no_lock, sizeof(no_lock) - 2U));
+  assert(!isNoLockMessage(nullptr, sizeof(no_lock) - 1U));
+  const uint8_t wrong_message[] = "NO LOCK FOUNX";
+  assert(!isNoLockMessage(wrong_message, sizeof(wrong_message) - 1U));
   uint8_t data[44];
   const char *hex = TELEMETRY_FIXTURE_HEX;
   for (unsigned i = 0; i < sizeof(data); ++i) {
@@ -17,6 +24,8 @@ int main() {
   }
   DecodedTelemetry fix;
   assert(decodeTelemetry(data, sizeof(data), fix));
+  assert(!isNoLockMessage(data, sizeof(data)));
+  assert(!decodeTelemetry(no_lock, sizeof(no_lock) - 1U, fix));
   assert(fix.i_tow_ms == 123456700U && fix.sequence == 42);
   assert(fix.latitude_e7 == 361432112 && fix.longitude_e7 == -868055040);
   assert(fix.altitude_msl_mm == 168730);
@@ -48,5 +57,6 @@ int main() {
   wrap.observe(UINT32_MAX);
   assert(wrap.observe(0).kind == SequenceKind::Forward);
   assert(wrap.unreceived_records == 0);
-  puts("Receiver tests passed: wire layout, signed values, validation, sequences.");
+  puts("Receiver tests passed: wire layout, signed values, validation, sequences, "
+       "exact no-lock status recognition.");
 }

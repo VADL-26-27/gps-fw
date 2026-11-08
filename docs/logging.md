@@ -72,17 +72,30 @@ written records can remain in RAM following an error/full condition.
 
 ```bash
 python -m pip install pyserial
-python scripts/gps_log.py dump --port COM7 --output gps-log.bin
-python scripts/gps_log.py decode gps-log.bin --csv gps-log.csv
+python scripts/gps_log.py download COM7 gps-log.bin
+python scripts/gps_log.py parse gps-log.bin gps-log.csv
 ```
 
-Both output filenames must be new; the tool refuses to replace an existing
-file. A failed download retains its partial raw file. The decoder checks page
-and record CRCs, reports missing pages/footer and dropped records, and writes
-verified records with coordinates in degrees, altitude/accuracy in meters,
+The default baud rate is 115200; `download --baud` must match USART2 on the
+GPS board. Both output filenames must be new; the tool refuses to replace an
+existing file. A failed download retains its partial raw file. Strict `parse`
+checks the session header, page order/types/counts, page and record CRCs,
+record totals, and completion footer. A failure returns a nonzero exit status
+and preserves the valid CSV prefix already written. It reports firmware drop
+counts and writes verified records with coordinates in degrees, altitude/accuracy in meters,
 velocity in m/s, UTC milliseconds, GNSS time of week, flags, and sequence.
-`unix_time_ms == 0` means UTC was unavailable. A warning-free decode with a
-footer is the clean completion case; retain the raw binary alongside the CSV.
+`unix_time_ms == 0` means UTC was unavailable. Retain the raw binary alongside
+the CSV. For power loss, full flash, a missing footer, or damaged pages, request
+recovery explicitly (use another new output filename):
+
+```bash
+python scripts/gps_log.py parse gps-log.bin gps-recovered.csv --recover
+```
+
+Recovery skips damaged pages/records and reports warnings; it does not certify
+a complete session. The earlier command forms remain available:
+`dump --port COM7 --output gps-log.bin` and
+`decode gps-log.bin --csv gps-log.csv` (`decode` uses recovery mode).
 Full-flash download at 115200 baud takes roughly 49 minutes.
 
 4. After checking the saved data, reopen Serial Monitor, send `LOG_CLEAR`, and
